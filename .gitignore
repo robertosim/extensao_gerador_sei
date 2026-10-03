@@ -1,0 +1,21 @@
+# Scripts Python (não versionar)
+*.py
+*.pyc
+__pycache__/
+
+# Artefatos e temporários
+*.crx
+*.pem
+*.zip
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Saídas de execução
+relatorio_gerador_sei.csv
+*.log
+
+# Dependências / editores
+node_modules/
+.vscode/
+.idea/

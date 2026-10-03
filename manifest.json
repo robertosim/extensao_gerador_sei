@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "Gerador SEI",
+  "version": "1.0.0",
+  "description": "Anexa documentos, gera processos e baixa espelhos no SEI/PGT do INCRA automaticamente. Painel com CSV, PDFs, configuracoes, log e keep-alive.",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "alarms",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://sei.incra.gov.br/*",
+    "https://pgt.incra.gov.br/*"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Gerador SEI",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://sei.incra.gov.br/*"],
+      "js": ["comum.js", "content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://sei.incra.gov.br/*"],
+      "js": ["main_world.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://pgt.incra.gov.br/*"],
+      "js": ["comum.js", "pgt.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

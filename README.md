@@ -1,0 +1,85 @@
+# Gerador SEI — Extensão do Chrome (MV3)
+
+Extensão que automatiza o fluxo **dentro do navegador**: gera processos no SEI a
+partir de um CSV, baixa os espelhos no PGT e anexa os PDFs — sem servidor local
+e sem dependências externas.
+
+## Instalação
+
+1. Abra `chrome://extensions`
+2. Ative **Modo do desenvolvedor**
+3. **Carregar descompactada** e escolha a pasta do projeto
+4. Tenha uma aba logada em https://sei.incra.gov.br (e, para os downloads,
+   https://pgt.incra.gov.br)
+
+> Chrome mark-branded não aceita `--load-extension`; para testes automatizados,
+> carregue a pasta num Chromium/Chromium puro.
+
+## Abas do painel
+
+| Aba | O que faz |
+|-----|-----------|
+| **Gerar** | Carrega o CSV, escolhe Tipo do Processo / especificação / interessados / hipótese legal e cria os processos no SEI. Barra de progresso `gerando X de Y`, botões **Pausar**/**Continuar** e **Cancelar** (mantém a fila), **Repetir falhas**, **Limpar** e **Exportar** (`relatorio_gerador_sei.csv`) |
+| **Baixar** | Baixa o **Espelho da Unidade Familiar** de cada beneficiário da fila no PGT. Barra `baixando X de Y`, **Pausar**/**Continuar**, **Cancelar** (para e **zera o progresso**, os registros ficam na fila) e **Executar novamente (erros)**. Arquivos caem em `Downloads/Anexos SEI/downloads/` |
+| **Anexar** | Sobe os PDFs, configura tipo do documento / nome na árvore / sigilo / nível / hipótese e anexa no SEI. Barra `anexando X de Y`, **Pausar**/**Continuar**, **Cancelar** e **Repetir falhas**. Os registros (código, nome, processo SEI) vêm do CSV da aba Gerar |
+| **Log** | Log unificado das três execuções (`Gerar`, `Baixar`, `Anexar`) com limpeza manual |
+
+Rodapé: **Manter SEI vivo** recarrega a aba do SEI periodicamente (usa alarme do
+`background.js`, então continua com o painel fechado).
+
+## Arquivos
+
+| Arquivo | Papel |
+|---------|-------|
+| `manifest.json` | MV3: permissões, content scripts, ícones |
+| `background.js` | Service worker: keep-alive, tick da aba, badge, `chrome.downloads` |
+| `content.js` | Máquina de estados dos passos ANEXAR/GERAR no SEI (claim, RPC) |
+| `pgt.js` | Máquina de estados dos passos de download no PGT |
+| `main_world.js` | Ponte RPC no mundo da página (funções do SEI) |
+| `popup.html/css/js` | Painel de controle (abas, progresso, exportar) |
+| `comum.js` | `chrome.storage.local`, CSV, coringas, log |
+| `listas.js` | Listas do SEI (tipos de processo/documento, hipóteses) |
+| `icons/` | Ícones da extensão (16, 32, 48 e 128 px) |
+
+## Como funciona
+
+- Todo o estado fica em `chrome.storage.local`: `fila` (registros do CSV),
+  `execucao` (máquina de estados: tipo, passo, pausado, contadores), `log`,
+  `cfg_geracao`, `cfg_anexo` e `keepalive`
+- Um tique a cada 600 ms (mais o alarme do `background.js`) avança um passo;
+  timeout de 90 s por passo — 300 s para o passo de download
+- A cada passo um *claim* de 6 s evita que frames concorrentes executem o mesmo
+  passo; passos com falha marcam o item e não são repetidos no mesmo ciclo
+- `content.js` cuida de `gerar`/`anexar` na aba do SEI; `pgt.js` cuida de
+  `download` na aba do PGT (abrir busca → digitar código → Pesquisar →
+  detalhar → **Baixar relatorio**); o arquivo é salvo pelo `chrome.downloads` do
+  `background.js`, que avisa o `pgt.js` ao terminar
+- Apenas uma execução por vez: começar outra mostra o aviso de fila ocupada
+
+## Padrões
+
+- **Tipo do processo**: `100000508` — *Finalístico: Desenvolvimento de
+  Assentamentos* (pré-selecionado; troque na aba Gerar)
+- **Colunas do CSV**: código do beneficiário, nome do titular 1 e nº do processo
+  SEI (aceita `;` ou `,`, UTF-8/CP1252/Latin-1)
+- **Espelhos**: `Downloads/arquivos_pgt/<nome original do arquivo>` (o nome vem do
+  próprio PGT; em colisão o `background.js` acrescenta o código do beneficiário)
+
+## Solução de problemas
+
+| Problema | Solução |
+|----------|---------|
+| Sessão expirada | Refaça o login no SEI/PGT na aba correspondente e reinicie a execução |
+| Download falha | Confira se a aba do PGT está aberta e logada; use **Executar novamente (erros)** |
+| Nada acontece ao clicar no ícone | Recarregue a extensão em `chrome://extensions` |
+| Fila ocupada | Termine ou cancele a execução atual antes de iniciar outra |
+
+## Suporte
+
+**Desenvolvido por Roberto Simões**
+
+| Canal | Contato |
+|-------|---------|
+| E-mail | [robsimoes@gmail.com](mailto:robsimoes@gmail.com) |
+| WhatsApp | +55 (48) 99679-3828 |
+| LinkedIn | [linkedin.com/in/robertosim](https://www.linkedin.com/in/robertosim) |

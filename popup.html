@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Gerador SEI</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+
+<div class="header">
+  <h1>Gerador SEI</h1>
+  <div id="badge-status" class="badge oculto"></div>
+</div>
+
+<nav class="abas">
+  <button class="aba ativa" data-aba="gerar">Gerar</button>
+  <button class="aba" data-aba="downloads">Baixar</button>
+  <button class="aba" data-aba="anexar">Anexar</button>
+  <button class="aba" data-aba="log">Log</button>
+</nav>
+
+<main>
+
+  <!-- ------------------------------------------------------- DOWNLOADS -->
+  <section id="aba-downloads" class="conteudo">
+
+    <div class="card">
+      <div class="exec-topo">
+        <strong>Downloads da PGT</strong>
+        <span id="dl-status" class="chip oculto"></span>
+      </div>
+      <div class="linha acoes">
+        <span id="rotulo-espelho" class="rotulo">Espelho da Unidade Familiar</span>
+        <button id="btn-baixar-espelho" class="primario">Baixar</button>
+        <button id="btn-cancelar-download" class="perigo">Cancelar</button>
+        <button id="btn-retry-download" class="secundario oculto">Executar novamente (erros)</button>
+        <button id="btn-abrir-pgt" class="secundario">Abrir aba do PGT</button>
+      </div>
+      <div id="progresso-download" class="progresso oculto">
+        <div class="barra barra-progresso">
+          <div id="dl-preenchimento" class="preenchimento"></div>
+          <span id="dl-pct">0%</span>
+        </div>
+        <div id="dl-contador" class="prog-contador">baixando 0 de 0</div>
+      </div>
+      <div id="dl-texto" class="exec-texto oculto">&nbsp;</div>
+      <div id="dl-atual" class="exec-atual oculto">&nbsp;</div>
+      <div id="dl-erros" class="exec-erros oculto"></div>
+      <div id="stats-download" class="stats">-</div>
+      <div id="aviso-download" class="msg"></div>
+      <div class="msg">Os codigos vem do CSV da aba <b>Gerar</b>; os espelhos sao salvos em
+        <b>Downloads/arquivos_pgt</b>.</div>
+    </div>
+
+  </section>
+
+  <!-- ---------------------------------------------------------- ANEXAR -->
+  <section id="aba-anexar" class="conteudo">
+
+    <div class="card">
+      <h2>Configuracao da anexacao</h2>
+      <div class="grade">
+        <label class="campo largo">
+          <span>Tipo do documento</span>
+          <select id="cfg-serie"></select>
+        </label>
+        <label class="campo largo">
+          <span>Nome na arvore ({{coringas}})</span>
+          <input type="text" id="cfg-nome-arvore" placeholder="CCIR {{Codigo SIPRA}}">
+        </label>
+        <label class="campo largo">
+          <span>Grau de sigilo</span>
+          <select id="cfg-sigilo">
+            <option value="R">Reservado</option>
+            <option value="U">Urgente</option>
+            <option value="S">Sigiloso</option>
+          </select>
+        </label>
+        <label class="campo largo">
+          <span>Nivel de acesso</span>
+          <select id="cfg-nivel">
+            <option value="0">Publico</option>
+            <option value="1">Restrito</option>
+            <option value="2">Sigiloso</option>
+          </select>
+        </label>
+        <label class="campo largo">
+          <span>Hipotese legal</span>
+          <select id="cfg-hipotese"></select>
+        </label>
+      </div>
+      <div class="linha">
+        <button id="btn-salvar-cfg-anexo" class="primario">Salvar configuracao</button>
+        <span id="cfg-anexo-msg" class="msg"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Dados <span id="ax-status" class="chip oculto"></span></h2>
+      <div class="linha">
+        <label class="arquivo">PDFs
+          <input type="file" id="pdfs-anexar" accept="application/pdf,.pdf" multiple>
+        </label>
+      </div>
+      <div id="stats-anexar" class="stats">-</div>
+      <div class="linha acoes">
+        <button id="btn-iniciar-anexar" class="primario">Iniciar anexacao</button>
+        <button id="btn-retry-anexar" class="secundario">Repetir falhas</button>
+        <button id="btn-limpar-anexar" class="perigo">Limpar</button>
+        <button id="btn-abrir-sei-anexar" class="secundario">Abrir aba do SEI</button>
+        <button id="btn-cancelar-anexar" class="perigo oculto">Cancelar</button>
+      </div>
+      <div id="progresso-anexar" class="progresso oculto">
+        <div class="barra barra-progresso">
+          <div id="ax-preenchimento" class="preenchimento"></div>
+          <span id="ax-pct">0%</span>
+        </div>
+        <div id="ax-contador" class="prog-contador">anexando 0 de 0</div>
+      </div>
+      <div id="ax-texto" class="exec-texto oculto">&nbsp;</div>
+      <div id="ax-atual" class="exec-atual oculto">&nbsp;</div>
+      <div id="ax-erros" class="exec-erros oculto"></div>
+      <div id="aviso-anexar" class="msg"></div>
+      <div class="msg">Os registros vem do CSV carregado na aba <b>Gerar</b> (codigo, nome e processo SEI).</div>
+    </div>
+
+    <div class="card">
+      <h2>Registros <span id="contagem-anexar" class="contador"></span></h2>
+      <div class="tabela-envolve">
+        <table>
+          <thead>
+            <tr><th>Cod.</th><th>Processo SEI</th><th>PDF</th><th>Status</th></tr>
+          </thead>
+          <tbody id="tabela-anexar"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ----------------------------------------------------------- GERAR -->
+  <section id="aba-gerar" class="conteudo ativa">
+
+    <div class="card">
+      <h2>Configuracao da geracao</h2>
+      <div class="grade">
+        <label class="campo largo">
+          <span>Tipo do processo</span>
+          <select id="cfg-tipo-processo"></select>
+        </label>
+        <label class="campo largo">
+          <span>Especificacao (coringas do CSV)</span>
+          <input type="text" id="cfg-especificacao" placeholder="{{Nome Titular 1}}">
+        </label>
+        <label class="campo largo">
+          <span>Interessados</span>
+          <input type="text" id="cfg-interessados" placeholder="{{Nome Titular 1}}">
+        </label>
+        <label class="campo largo">
+          <span>Observacoes desta unidade</span>
+          <input type="text" id="cfg-observacoes">
+        </label>
+        <label class="campo largo">
+          <span>Nivel de acesso</span>
+          <select id="cfg-nivel-gerar">
+            <option value="0">Publico</option>
+            <option value="1">Restrito</option>
+            <option value="2">Sigiloso</option>
+          </select>
+        </label>
+        <label class="campo largo">
+          <span>Hipotese legal</span>
+          <select id="cfg-hipotese-gerar"></select>
+        </label>
+      </div>
+      <div class="linha">
+        <button id="btn-salvar-cfg-geracao" class="primario">Salvar configuracao</button>
+        <span id="cfg-geracao-msg" class="msg"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Fila de geracao</h2>
+      <div class="linha">
+        <label class="arquivo">CSV
+          <input type="file" id="csv-gerar" accept=".csv,text/csv">
+        </label>
+        <span id="arquivo-gerar" class="msg"></span>
+      </div>
+      <div id="stats-gerar" class="stats">-</div>
+      <div class="linha acoes">
+        <button id="btn-iniciar-gerar" class="primario">Iniciar geracao</button>
+        <button id="btn-cancelar-gerar" class="perigo oculto">Cancelar</button>
+        <button id="btn-retry-gerar" class="secundario">Repetir falhas</button>
+        <button id="btn-limpar-gerar" class="perigo">Limpar</button>
+        <button id="btn-exportar-gerar" class="verde">Exportar</button>
+      </div>
+      <div id="progresso-gerar" class="progresso oculto">
+        <div class="barra barra-progresso">
+          <div id="prog-preenchimento" class="preenchimento"></div>
+          <span id="prog-pct">0%</span>
+        </div>
+        <div id="prog-contador" class="prog-contador">gerando 0 de 0</div>
+      </div>
+      <div id="aviso-gerar" class="msg"></div>
+    </div>
+
+    <div class="card">
+      <h2>Fila <span id="contagem-gerar" class="contador"></span></h2>
+      <div class="tabela-envolve">
+        <table>
+          <thead>
+            <tr><th>Cod.</th><th>Status</th><th>NUP gerado</th><th>Erro</th></tr>
+          </thead>
+          <tbody id="tabela-gerar"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ------------------------------------------------------------- LOG -->
+  <section id="aba-log" class="conteudo">
+    <div class="card">
+      <div class="linha">
+        <h2>Log</h2>
+        <button id="btn-limpar-log" class="secundario mini">Limpar log</button>
+      </div>
+      <pre id="lista-log" class="log"></pre>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="linha rodape">
+    <label class="check"><input type="checkbox" id="ka-ativo"> Manter SEI vivo</label>
+    <label class="intervalo">a cada
+      <input type="number" id="ka-intervalo" min="30" step="10" value="60"> s
+    </label>
+    <button id="btn-ka-agora" class="secundario mini">Recarregar agora</button>
+  </div>
+  <div id="ka-status" class="ka-status">&nbsp;</div>
+</footer>
+
+<div id="toast" class="toast oculto"></div>
+
+<script src="listas.js"></script>
+<script src="comum.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>
