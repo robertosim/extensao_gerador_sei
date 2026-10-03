@@ -1051,10 +1051,51 @@ function pararPorContextoInvalido(erro) {
   setTimeout(() => { try { location.reload(); } catch (e) { /* ignora */ } }, 600);
 }
 
+// ------------------------------------------------------------- congelamento
+// Chrome 133+ (Energy Saver) congela abas de fundo de alto uso de CPU: o
+// motor para junto porque timers e mensagens deixam de rodar. Manter um
+// Web Lock ativo e uma das isencoes oficiais (CannotFreezeReason::
+// kHoldingWebLock em freezing_policy.cc do Chromium). O lock e "shared" para
+// que todos os frames do SEI (mesma origem) o mantenham sem competir.
+const NOME_LOCK = 'gsei-execucao';
+let _lockAtiva = false;
+let _lockPedido = false;
+
+function manterDescongelada(ativo) {
+  _lockAtiva = !!ativo;
+  if (!_lockAtiva || _lockPedido) return;
+  _lockPedido = true;
+  try {
+    navigator.locks.request(NOME_LOCK, { mode: 'shared' }, async () => {
+      try {
+        while (_lockAtiva) await dormir(1000);
+      } finally {
+        _lockPedido = false;
+        // a execucao voltou antes de o lock ser liberado: pede de novo
+        if (_lockAtiva) setTimeout(() => manterDescongelada(true), 0);
+      }
+    }).catch(() => { _lockPedido = false; });
+  } catch (e) { _lockPedido = false; }
+}
+
+// Page Lifecycle: "freeze"/"resume" chegam no document. O log explica no
+// momento em que a automacao parou (e quando ela voltou).
+document.addEventListener('freeze', () => {
+  if (!_timer) return;
+  GSEI.registrar('Aba congelada pelo Chrome (Energy Saver): automacao pausada', 'AVISO')
+    .catch(() => {});
+});
+document.addEventListener('resume', () => {
+  if (!_timer) return;
+  GSEI.registrar('Aba descongelada pelo Chrome: automacao retomada').catch(() => {});
+  tick();
+});
+
 async function avaliarTrabalho() {
   try {
     const ex = await lerExecucao();
     const ativo = !!(ex && ex.ativa && (ex.tipo === 'gerar' || ex.tipo === 'anexar'));
+    manterDescongelada(ativo);
     if (ativo && !_timer) {
       _timer = setInterval(tick, TICK_MS);
       tick();

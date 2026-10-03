@@ -66,21 +66,13 @@
         </label>
         <label class="campo largo">
           <span>Nome na arvore ({{coringas}})</span>
-          <input type="text" id="cfg-nome-arvore" placeholder="CCIR {{Codigo SIPRA}}">
-        </label>
-        <label class="campo largo">
-          <span>Grau de sigilo</span>
-          <select id="cfg-sigilo">
-            <option value="R">Reservado</option>
-            <option value="U">Urgente</option>
-            <option value="S">Sigiloso</option>
-          </select>
+          <input type="text" id="cfg-nome-arvore" placeholder="RG {{Codigo SIPRA}}">
         </label>
         <label class="campo largo">
           <span>Nivel de acesso</span>
           <select id="cfg-nivel">
             <option value="0">Publico</option>
-            <option value="1">Restrito</option>
+            <option value="1" selected>Restrito</option>
             <option value="2">Sigiloso</option>
           </select>
         </label>
@@ -153,10 +145,6 @@
           <input type="text" id="cfg-especificacao" placeholder="{{Nome Titular 1}}">
         </label>
         <label class="campo largo">
-          <span>Interessados</span>
-          <input type="text" id="cfg-interessados" placeholder="{{Nome Titular 1}}">
-        </label>
-        <label class="campo largo">
           <span>Observacoes desta unidade</span>
           <input type="text" id="cfg-observacoes">
         </label>
@@ -164,7 +152,7 @@
           <span>Nivel de acesso</span>
           <select id="cfg-nivel-gerar">
             <option value="0">Publico</option>
-            <option value="1">Restrito</option>
+            <option value="1" selected>Restrito</option>
             <option value="2">Sigiloso</option>
           </select>
         </label>

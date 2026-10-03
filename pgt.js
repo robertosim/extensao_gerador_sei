@@ -102,34 +102,88 @@ function campoUtil(el) {
   return interno || null;
 }
 
+// A busca global do cabecalho (combobox "O que voce procura?", id dinamico do
+// tipo "searchbox-90072") nunca e o campo de codigo do beneficiario: se o
+// codigo cai la, a fila simplesmente para (a busca devolve nada e o passo fica
+// esperando ate estourar o timeout). Os sinais abaixo nao dependem do id.
+function ehBuscaGlobal(el) {
+  if (!el || !el.getAttribute) return false;
+  if (el.getAttribute('role') === 'combobox') return true;
+  if (/search-results/i.test(el.getAttribute('aria-controls') || '')) return true;
+  const descritivo = [el.id || '', el.name || '', el.getAttribute('placeholder') || ''].join(' ');
+  if (/o que voce procura|searchbox|busca global|pesquisa global/i.test(descritivo)) return true;
+  return false;
+}
+
+// Regiao de cabecalho/menu: descarta candidatos ambiguos. O campo oficial
+// #codigoBeneficiario continua sendo aceito mesmo que a pagina o renderize
+// perto de um <header>/nav.
+function ehEmCabecalho(el) {
+  if (!el || !el.closest) return false;
+  try {
+    return !!el.closest(
+      'header, [role="banner"], nav, app-header, .br-header, #header, .topbar, .navbar');
+  } catch (e) { return false; }
+}
+
+// Texto do campo sem acento/maiuscula: casa "Codigo ..." com "codigo".
+function descritivoCampo(el) {
+  if (!el) return '';
+  const attr = (n) => (el.getAttribute ? String(el.getAttribute(n) || '') : '');
+  return GSEI.normalizar(
+    [el.id || '', attr('name'), attr('formcontrolname'), attr('placeholder')].join(' ')
+  ).toLowerCase();
+}
+
+// Fora da lista exata so serve um input que fale de codigo/cod benef.
+function ehCampoCodigo(el) {
+  return /cod[\s_-]?(benef|igo)/.test(descritivoCampo(el));
+}
+
+// Campo do codigo do beneficiario. Alvo oficial:
+// <input id="codigoBeneficiario" formcontrolname="codigo">. A busca global do
+// cabecalho e descartada na hora; se o campo certo nao estiver na pagina,
+// devolvemos null (o passo tenta de novo) em vez de digitar o codigo no
+// primeiro input disponivel.
 function campoBusca() {
-  const seletores = [
+  const exatos = [
     'input#codigoBeneficiario',
     '#codigoBeneficiario',
     'input[formcontrolname="codigo" i]',
-    'input[formcontrolname*="codigo" i]',
+    'input[formcontrolname*="codigo" i]'
+  ];
+  const parecidos = [
     'input[id*="codigo" i]', 'input[name*="codigo" i]',
     'input[id*="cod_benef" i]', 'input[name*="cod_benef" i]',
-    'input[placeholder*="codigo" i]',
-    'input#nomeTitular',
-    '#nomeTitular',
-    'input[id*="titular" i]', 'input[name*="titular" i]',
-    'input[placeholder*="beneficiario" i]'
+    'input[placeholder*="codigo" i]'
   ];
-  for (const sel of seletores) {
-    let achado = [];
-    try { achado = Array.from(document.querySelectorAll(sel)); } catch (e) { achado = []; }
-    for (const bruto of achado) {
-      if (bruto.type === 'hidden' || !visivel(bruto)) continue;
-      const alvo = campoUtil(bruto);
-      if (alvo) return alvo;
+  for (const grupo of [exatos, parecidos]) {
+    for (const sel of grupo) {
+      let achado = [];
+      try { achado = Array.from(document.querySelectorAll(sel)); } catch (e) { achado = []; }
+      for (const bruto of achado) {
+        if (bruto.type === 'hidden' || !visivel(bruto)) continue;
+        if (ehBuscaGlobal(bruto)) continue;
+        const alvo = campoUtil(bruto);
+        if (!alvo || !visivel(alvo) || ehBuscaGlobal(alvo)) continue;
+        if (grupo === parecidos && (!ehCampoCodigo(alvo) || ehEmCabecalho(alvo))) continue;
+        return alvo;
+      }
     }
   }
-  const gerais = Array.from(document.querySelectorAll('input'))
-    .filter(e => e.type !== 'hidden' && visivel(e)
-      && !/(login|senha|usuario|email|cpf|data|valor)/i.test(
-        (e.id || '') + ' ' + (e.name || '') + ' ' + (e.placeholder || '')));
-  return gerais[0] || null;
+
+  // Ultimo recurso: inputs ao redor do botao "Pesquisar" que falem de codigo.
+  // So ali, nunca "o primeiro input visivel" (isso enchia a busca global).
+  const pesquisar = botaoPesquisar();
+  if (!pesquisar) return null;
+  const bloco = pesquisar.closest(
+    'form, section, [role="search"], .br-card, [class*="card" i], [class*="busca" i]')
+    || pesquisar.parentElement;
+  if (!bloco || !bloco.querySelectorAll) return null;
+  const candidatos = Array.from(bloco.querySelectorAll('input'))
+    .filter(e => e.type !== 'hidden' && visivel(e) && !ehBuscaGlobal(e)
+      && !ehEmCabecalho(e) && ehCampoCodigo(e));
+  return candidatos[0] || null;
 }
 
 // Botao "Pesquisar" da busca: <button type="submit" class="br-button primary">.
@@ -139,7 +193,7 @@ function botaoPesquisar() {
   try {
     botoes = Array.from(document.querySelectorAll(
       'button, input[type="submit"], [role="button"], a'))
-      .filter(e => visivel(e));
+      .filter(e => visivel(e) && !ehBuscaGlobal(e));
   } catch (e) { botoes = []; }
 
   const exatos = botoes.filter(e => textoDe(e) === 'pesquisar');
@@ -412,7 +466,8 @@ const PASSOS_DOWNLOAD = [
         return false;
       }
       const campo = campoBusca();
-      if (!campo) {
+      // cinto e suspensorio: nunca digitar na busca global do cabecalho
+      if (!campo || ehBuscaGlobal(campo) || /^searchbox/i.test(campo.id || '')) {
         _diag = 'campo #codigoBeneficiario nao encontrado';
         return false;
       }
@@ -735,10 +790,49 @@ function pararPorContextoInvalido(erro) {
   setTimeout(() => { try { location.reload(); } catch (e) { /* ignora */ } }, 600);
 }
 
+// ------------------------------------------------------------- congelamento
+// Chrome 133+ (Energy Saver) congela abas de fundo de alto uso de CPU: o
+// motor para junto porque timers e mensagens deixam de rodar. Manter um
+// Web Lock ativo e uma das isencoes oficiais (CannotFreezeReason::
+// kHoldingWebLock em freezing_policy.cc do Chromium).
+const NOME_LOCK = 'gsei-execucao';
+let _lockAtiva = false;
+let _lockPedido = false;
+
+function manterDescongelada(ativo) {
+  _lockAtiva = !!ativo;
+  if (!_lockAtiva || _lockPedido) return;
+  _lockPedido = true;
+  try {
+    navigator.locks.request(NOME_LOCK, { mode: 'shared' }, async () => {
+      try {
+        while (_lockAtiva) await dormir(1000);
+      } finally {
+        _lockPedido = false;
+        if (_lockAtiva) setTimeout(() => manterDescongelada(true), 0);
+      }
+    }).catch(() => { _lockPedido = false; });
+  } catch (e) { _lockPedido = false; }
+}
+
+// Page Lifecycle: "freeze"/"resume" chegam no document. O log explica no
+// momento em que a automacao parou (e quando ela voltou).
+document.addEventListener('freeze', () => {
+  if (!_timer) return;
+  GSEI.registrar('Aba do PGT congelada pelo Chrome (Energy Saver): automacao pausada', 'AVISO')
+    .catch(() => {});
+});
+document.addEventListener('resume', () => {
+  if (!_timer) return;
+  GSEI.registrar('Aba do PGT descongelada pelo Chrome: automacao retomada').catch(() => {});
+  tick();
+});
+
 async function avaliarTrabalho() {
   try {
     const ex = await lerExecucao();
     const ativo = !!(ex && ex.ativa && ex.tipo === 'download');
+    manterDescongelada(ativo);
     if (ativo && !_timer) {
       _timer = setInterval(tick, TICK_MS);
       tick();

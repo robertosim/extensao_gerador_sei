@@ -20,7 +20,7 @@ e sem dependências externas.
 | Aba | O que faz |
 |-----|-----------|
 | **Gerar** | Carrega o CSV, escolhe Tipo do Processo / especificação / interessados / hipótese legal e cria os processos no SEI. Barra de progresso `gerando X de Y`, botões **Pausar**/**Continuar** e **Cancelar** (mantém a fila), **Repetir falhas**, **Limpar** e **Exportar** (`relatorio_gerador_sei.csv`) |
-| **Baixar** | Baixa o **Espelho da Unidade Familiar** de cada beneficiário da fila no PGT. Barra `baixando X de Y`, **Pausar**/**Continuar**, **Cancelar** (para e **zera o progresso**, os registros ficam na fila) e **Executar novamente (erros)**. Arquivos caem em `Downloads/Anexos SEI/downloads/` |
+| **Baixar** | Baixa o **Espelho da Unidade Familiar** de cada beneficiário da fila no PGT. Barra `baixando X de Y`, **Pausar**/**Continuar**, **Cancelar** (para e **zera o progresso**, os registros ficam na fila) e **Executar novamente (erros)**. Arquivos caem em `Downloads/arquivos_pgt/` |
 | **Anexar** | Sobe os PDFs, configura tipo do documento / nome na árvore / sigilo / nível / hipótese e anexa no SEI. Barra `anexando X de Y`, **Pausar**/**Continuar**, **Cancelar** e **Repetir falhas**. Os registros (código, nome, processo SEI) vêm do CSV da aba Gerar |
 | **Log** | Log unificado das três execuções (`Gerar`, `Baixar`, `Anexar`) com limpeza manual |
 
@@ -55,6 +55,13 @@ Rodapé: **Manter SEI vivo** recarrega a aba do SEI periodicamente (usa alarme d
   detalhar → **Baixar relatorio**); o arquivo é salvo pelo `chrome.downloads` do
   `background.js`, que avisa o `pgt.js` ao terminar
 - Apenas uma execução por vez: começar outra mostra o aviso de fila ocupada
+- Com o navegador minimizado, outra aba ativa ou em outra área de trabalho o
+  Chrome reduz os timers, **congela** a aba (Energy Saver) ou a **descarta**
+  (Memory Saver). A execução continua mesmo assim: o `background.js` dispara o
+  tique a cada 30 s, o motor mantém um *Web Lock* ativo (isenção oficial de
+  freeze), as abas do SEI/PGT ficam `autoDiscardable=false` enquanto a execução
+  roda e uma aba que para de responder é recarregada (o estado sai do
+  `chrome.storage.local`); os eventos de freeze/resume entram no **Log**
 
 ## Padrões
 
@@ -73,6 +80,7 @@ Rodapé: **Manter SEI vivo** recarrega a aba do SEI periodicamente (usa alarme d
 | Download falha | Confira se a aba do PGT está aberta e logada; use **Executar novamente (erros)** |
 | Nada acontece ao clicar no ícone | Recarregue a extensão em `chrome://extensions` |
 | Fila ocupada | Termine ou cancele a execução atual antes de iniciar outra |
+| Automação parada com o navegador minimizado | Veja o **Log**: se aparecer `Aba ... congelada pelo Chrome` a aba foi congelada/recarregada; mantenha a aba do SEI logada e a extensão carregada |
 
 ## Suporte
 

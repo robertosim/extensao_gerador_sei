@@ -22,6 +22,17 @@ let _timer = null;
 let _toastTimer = null;
 const _confirmacao = new Map();
 
+// Controle de render: as secoes pesadas (tabelas) so sao redesenhadas quando
+// a aba correspondente esta visivel; as demais ficam "sujas" e sao desenhadas
+// na troca de aba. Assim a fila pode rodar sem engarrafar a interface.
+let _abaAtiva = 'gerar';
+let _agendado = null;
+const _sujo = {
+  fila: true, registros: true, log: true,
+  downloads: true, keepalive: true, execucao: true
+};
+const _html = new Map(); // ultimo HTML por elemento (evita reflow inutil)
+
 // ------------------------------------------------------------------ util
 
 function esc(valor) {
@@ -102,13 +113,77 @@ async function textoDoArquivo(arquivo) {
 
 // ------------------------------------------------------------------- abas
 
+// Grava o HTML so quando ele mudou: evita relayout das tabelas a cada tique.
+function aplicarHtml(el, html) {
+  const chave = el.id || el.className;
+  if (_html.get(chave) === html) return;
+  _html.set(chave, html);
+  el.innerHTML = html;
+}
+
+// Secao pesada de cada aba (renderiza apenas com a aba visivel).
+const SECOES_ABA = {
+  gerar: ['fila'],
+  downloads: ['downloads'],
+  anexar: ['registros'],
+  log: ['log']
+};
+
+function abaVisivel(secao) {
+  return (SECOES_ABA[_abaAtiva] || []).indexOf(secao) >= 0;
+}
+
+// Marca secoes como pendentes e agenda UM unico passo de render: varias
+// mudancas de storage no mesmo instante viram um redesenho so.
+function agendarRender(secoes) {
+  (secoes && secoes.length ? secoes : Object.keys(_sujo)).forEach(s => {
+    if (s in _sujo) _sujo[s] = true;
+  });
+  if (_agendado !== null) return;
+  _agendado = setTimeout(() => { _agendado = null; processarRender(); }, 120);
+}
+
+// forcar=true ignora a aba visivel (usado na abertura do popup, para a
+// primeira pintura sair completa; depois so a aba aberta e redesenhada).
+async function processarRender(forcar) {
+  try {
+    if (_sujo.keepalive) { _sujo.keepalive = false; await renderKeepalive(); }
+    if (_sujo.execucao) { _sujo.execucao = false; await renderExecucao(); }
+    if (_sujo.downloads) { _sujo.downloads = false; await renderDownloads(); }
+    // Tabelas: so com a aba aberta; caso contrario continuam sujas ate a troca.
+    if (_sujo.fila && (forcar || abaVisivel('fila'))) { _sujo.fila = false; await renderFila(); }
+    if (_sujo.registros && (forcar || abaVisivel('registros'))) { _sujo.registros = false; await renderRegistros(); }
+    if (_sujo.log && (forcar || abaVisivel('log'))) { _sujo.log = false; await renderLog(); }
+  } catch (e) {
+    console.warn('[Gerador SEI] render:', e);
+  }
+}
+
+// Troca de aba: a classe ja foi trocada de forma sincrona (a aba responde
+// na hora) e aqui so desenhamos a secao que ficou pendente.
+async function abrirAba(aba) {
+  _abaAtiva = aba;
+  const secao = (SECOES_ABA[aba] || [])[0];
+  if (!secao || !_sujo[secao]) return;
+  try {
+    _sujo[secao] = false;
+    if (secao === 'fila') await renderFila();
+    else if (secao === 'registros') await renderRegistros();
+    else if (secao === 'log') await renderLog();
+    else if (secao === 'downloads') await renderDownloads();
+  } catch (e) {
+    _sujo[secao] = true;
+    console.warn('[Gerador SEI] troca de aba:', e);
+  }
+}
+
 function configurarAbas() {
   $$('.aba').forEach(botao => {
     botao.addEventListener('click', () => {
       $$('.aba').forEach(b => b.classList.toggle('ativa', b === botao));
       const alvo = `aba-${botao.dataset.aba}`;
       $$('.conteudo').forEach(c => c.classList.toggle('ativa', c.id === alvo));
-      if (botao.dataset.aba === 'log') renderLog();
+      abrirAba(botao.dataset.aba);
     });
   });
 }
@@ -156,7 +231,10 @@ async function carregarConfigGeracao() {
     sel.value = TIPO_PROCESSO_PADRAO;
   }
   $('#cfg-especificacao').value = cfg.especificacao || '';
-  $('#cfg-interessados').value = cfg.interessados || '';
+  // guardado contra o campo sumir do HTML: cfg_geracao.interessados continua
+  // valendo (o passo 7 do SEI preenche "Interessados" com ele)
+  const campoInteressados = $('#cfg-interessados');
+  if (campoInteressados) campoInteressados.value = cfg.interessados || '';
   $('#cfg-observacoes').value = cfg.observacoes || '';
   $('#cfg-nivel-gerar').value = String(cfg.nivel_acesso || '1');
   $('#cfg-hipotese-gerar').value = String(cfg.hipotese_legal || '4');
@@ -178,10 +256,14 @@ async function salvarConfigAnexo() {
 }
 
 async function salvarConfigGeracao() {
+  const anterior = await GSEI.obter('cfg_geracao', {});
+  const campoInteressados = $('#cfg-interessados');
   const cfg = {
     tipo_processo: $('#cfg-tipo-processo').value,
     especificacao: $('#cfg-especificacao').value.trim(),
-    interessados: $('#cfg-interessados').value.trim(),
+    // campo ausente no HTML: guarda o valor anterior em vez de apagar a config
+    interessados: campoInteressados ? campoInteressados.value.trim()
+      : String(anterior.interessados || GSEI.PADRAO_GERACAO.interessados || '').trim(),
     observacoes: $('#cfg-observacoes').value.trim(),
     nivel_acesso: $('#cfg-nivel-gerar').value,
     hipotese_legal: $('#cfg-hipotese-gerar').value
@@ -239,17 +321,54 @@ async function sincronizarRegistros() {
   return registros;
 }
 
+// Chave de comparacao do codigo: apenas letras/digitos, para bater o codigo
+// do CSV com o nome do arquivo (unidade-familiar-MS001200000001.pdf).
+function chaveCod(txt) {
+  return String(txt || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+// Localiza no nome do PDF o codigo de um registro do CSV: a referencia vem do
+// proprio CSV (qualquer formato), comparada sem depender de prefixo fixo.
+// Sem CSV, aceita o token generico <letras><digitos> - S00323223, MS032323,
+// RO0000, SC012345 - usando sempre o token mais longo do nome.
+function codDoArquivo(nome, codigos) {
+  const semExt = String(nome || '').replace(/\.[Pp][Dd][Ff]$/, '');
+  const alvo = chaveCod(semExt);
+
+  let melhor = '';
+  for (const cod of codigos) {
+    const chave = chaveCod(cod);
+    if (chave && alvo.includes(chave) && chave.length > melhor.length) melhor = cod;
+  }
+  if (melhor) return String(melhor).trim().toUpperCase();
+
+  const candidatos = semExt.toUpperCase()
+    .split(/[^A-Z0-9]+/)
+    .filter(t => /^[A-Z]{1,3}\d{4,}$/.test(t))
+    .sort((a, b) => b.length - a.length);
+  return candidatos[0] || '';
+}
+
 async function carregarPdfs(files) {
   try {
     const pdfs = await GSEI.obter('pdfs', {});
+    const fila = await GSEI.obter('fila', []);
+    const atuais = await GSEI.obter('registros', []);
+    const codigos = new Set();
+    for (const f of fila) {
+      const c = String(f.cod_beneficiario || '').trim().toUpperCase();
+      if (c) codigos.add(c);
+    }
+    for (const r of atuais) {
+      const c = String(r.cod_sipra || '').trim().toUpperCase();
+      if (c) codigos.add(c);
+    }
     let carregados = 0, ignorados = 0;
-    const padrao = /SC0\d+/i;
 
     for (const arquivo of files) {
       if (!/\.pdf$/i.test(arquivo.name)) { ignorados++; continue; }
-      const achado = padrao.exec(arquivo.name);
-      if (!achado) { ignorados++; continue; }
-      const cod = achado[0].toUpperCase();
+      const cod = codDoArquivo(arquivo.name, codigos);
+      if (!cod) { ignorados++; continue; }
       pdfs[cod] = { nome: arquivo.name, b64: await paraBase64(await arquivo.arrayBuffer()) };
       carregados++;
     }
@@ -343,15 +462,15 @@ async function renderRegistros() {
     && (r.processo_sei || '').trim() !== '').length;
   const semPdf = registros.filter(r => !(r.pdf_anexo || '').trim()).length;
 
-  $('#stats-anexar').innerHTML =
+  aplicarHtml($('#stats-anexar'),
     `Total: <b>${stats.total}</b> &nbsp;|&nbsp; Anexados: <b>${stats.com_pdf}</b> `
     + `&nbsp;|&nbsp; Erros: <b>${stats.erros}</b> &nbsp;|&nbsp; Sem PDF: <b>${semPdf}</b> `
     + `&nbsp;|&nbsp; Com processo SEI: <b>${stats.com_processo}</b> `
-    + `&nbsp;|&nbsp; Prontos: <b>${pendentes}</b>`;
+    + `&nbsp;|&nbsp; Prontos: <b>${pendentes}</b>`);
 
   $('#contagem-anexar').textContent = registros.length ? `(${registros.length})` : '';
   const visiveis = registros.slice(0, LIMITE_TABELA);
-  $('#tabela-anexar').innerHTML = visiveis.map(r => {
+  aplicarHtml($('#tabela-anexar'), visiveis.map(r => {
     let classe = 'pend', texto = 'Pendente';
     if (r.anexado === 1) { classe = 'ok'; texto = 'Anexado'; }
     else if (r.anexado === -1) { classe = 'err'; texto = 'Erro'; }
@@ -359,7 +478,7 @@ async function renderRegistros() {
     else if (!(r.processo_sei || '').trim()) { classe = 'err'; texto = 'Sem processo'; }
     return `<tr><td>${esc(r.cod_sipra)}</td><td>${esc(r.processo_sei)}</td>`
       + `<td>${esc(r.pdf_anexo)}</td><td class="sit ${classe}">${texto}</td></tr>`;
-  }).join('') || '<tr><td colspan="4">Sem registros. Carregue o CSV na aba Gerar SEI e os PDFs aqui.</td></tr>';
+  }).join('') || '<tr><td colspan="4">Sem registros. Carregue o CSV na aba Gerar SEI e os PDFs aqui.</td></tr>');
 }
 
 async function renderFila() {
@@ -368,13 +487,13 @@ async function renderFila() {
   const erros = fila.filter(f => f.status === -1).length;
   const pendentes = fila.filter(f => f.status === 0 || f.status === -1).length;
 
-  $('#stats-gerar').innerHTML =
+  aplicarHtml($('#stats-gerar'),
     `Total: <b>${fila.length}</b> &nbsp;|&nbsp; Gerados: <b>${gerados}</b> `
-    + `&nbsp;|&nbsp; Erros: <b>${erros}</b> &nbsp;|&nbsp; Pendentes: <b>${pendentes}</b>`;
+    + `&nbsp;|&nbsp; Erros: <b>${erros}</b> &nbsp;|&nbsp; Pendentes: <b>${pendentes}</b>`);
   $('#contagem-gerar').textContent = fila.length ? `(${fila.length})` : '';
 
   const visiveis = fila.slice(0, LIMITE_TABELA);
-  $('#tabela-gerar').innerHTML = visiveis.map(f => {
+  aplicarHtml($('#tabela-gerar'), visiveis.map(f => {
     let classe = 'pend', texto = 'Pendente';
     if (f.status === 1) { classe = 'ok'; texto = 'Gerado'; }
     else if (f.status === -1) { classe = 'err'; texto = 'Erro'; }
@@ -382,17 +501,20 @@ async function renderFila() {
       + `<td class="sit ${classe}">${texto}</td>`
       + `<td>${esc(f.processo_gerado || '')}</td>`
       + `<td>${esc(f.erro || '')}</td></tr>`;
-  }).join('') || '<tr><td colspan="4">Fila vazia. Carregue o CSV.</td></tr>';
+  }).join('') || '<tr><td colspan="4">Fila vazia. Carregue o CSV.</td></tr>');
 }
 
 async function renderLog() {
   const log = await GSEI.obter('log', []);
   const linhas = log.slice(-LIMITE_LOG);
   const caixa = $('#lista-log');
-  const noFim = caixa.scrollTop + caixa.clientHeight >= caixa.scrollHeight - 30;
-  caixa.innerHTML = linhas.map(l =>
+  const html = linhas.map(l =>
     /ERRO|FALHA|abortad/i.test(l) ? `<span class="erro">${esc(l)}</span>` : esc(l)
   ).join('\n') || '(log vazio)';
+  // log muda a cada passo: sem alteracao real nao toca no DOM (sem reflow)
+  if (_html.get(caixa.id) === html) return;
+  const noFim = caixa.scrollTop + caixa.clientHeight >= caixa.scrollHeight - 30;
+  aplicarHtml(caixa, html);
   if (noFim) caixa.scrollTop = caixa.scrollHeight;
 }
 
@@ -480,9 +602,9 @@ async function renderDownloads() {
   const baixados = fila.filter(f => f.download === 1).length;
   const erros = fila.filter(f => f.download === -1).length;
   const pendentes = total - baixados - erros;
-  $('#stats-download').innerHTML =
+  aplicarHtml($('#stats-download'),
     `Total: <b>${total}</b> &nbsp;|&nbsp; Baixados: <b>${baixados}</b> `
-    + `&nbsp;|&nbsp; Erros: <b>${erros}</b> &nbsp;|&nbsp; Pendentes: <b>${pendentes}</b>`;
+    + `&nbsp;|&nbsp; Erros: <b>${erros}</b> &nbsp;|&nbsp; Pendentes: <b>${pendentes}</b>`);
 
   // so aparece quando ha falha para repetir e nada esta rodando
   const rodando = !!(ex && ex.ativa && ex.tipo === 'download');
@@ -633,15 +755,6 @@ async function renderKeepalive() {
   if (ka.ultimo_erro) status.textContent = `Aviso: ${ka.ultimo_erro}`;
   else if (ka.ultima_recarga) status.textContent = `Ultima recarga: ${ka.ultima_recarga} (${ka.recargas || 0}x)`;
   else status.textContent = 'Keep-alive sem execucao ainda.';
-}
-
-async function renderTudo() {
-  await renderRegistros();
-  await renderFila();
-  await renderLog();
-  await renderExecucao();
-  await renderKeepalive();
-  await renderDownloads();
 }
 
 // --------------------------------------------------------------- execucao
@@ -1000,15 +1113,13 @@ function iniciarMonitoramento() {
         : '';
       if (assinatura !== _assinatura) {
         _assinatura = assinatura;
-        await renderRegistros();
-        await renderFila();
-        await renderLog();
-        await renderDownloads();
+        // Um unico passo agendado: as tabelas so redesenham com a aba aberta.
+        agendarRender();
       }
     } catch (e) {
       console.warn('[Gerador SEI] monitor:', e);
     }
-  }, 800);
+  }, 1200);
 }
 
 // ------------------------------------------------------------------- boot
@@ -1017,23 +1128,28 @@ async function iniciarPopup() {
   configurarAbas();
   configurarEventos();
   carregarSelects();
+
+  // Registrado antes do primeiro render: nenhuma mudanca da fila se perde
+  // enquanto o popup abre (as secoes continuam "sujas" ate serem redesenhadas).
+  chrome.storage.onChanged.addListener((mudancas, area) => {
+    if (area !== 'local') return;
+    const secoes = [];
+    if (mudancas.log) secoes.push('log');
+    if (mudancas.registros) secoes.push('registros');
+    if (mudancas.fila) secoes.push('fila', 'downloads');
+    if (mudancas.execucao) secoes.push('execucao', 'downloads');
+    if (mudancas.keepalive) secoes.push('keepalive');
+    if (secoes.length) agendarRender(secoes);
+  });
+
   try {
     await carregarConfigAnexo();
     await carregarConfigGeracao();
-    await renderTudo();
+    await processarRender(true);
   } catch (e) {
     console.warn('[Gerador SEI] boot do popup:', e);
   }
   iniciarMonitoramento();
-
-  chrome.storage.onChanged.addListener((mudancas, area) => {
-    if (area !== 'local') return;
-    if (mudancas.log) renderLog();
-    if (mudancas.registros) renderRegistros();
-    if (mudancas.fila) { renderFila(); renderDownloads(); }
-    if (mudancas.execucao) renderExecucao();
-    if (mudancas.keepalive) renderKeepalive();
-  });
 }
 
 document.addEventListener('DOMContentLoaded', iniciarPopup);

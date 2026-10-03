@@ -106,8 +106,10 @@ async function enviarTick() {
       chrome.tabs.query({ url: URL_PGT })
     ]);
 
-    await Promise.all(abasSei.map(aba =>
-      chrome.tabs.sendMessage(aba.id, { acao: 'tick' }).catch(() => null)));
+    const respostasSei = await Promise.all(abasSei.map(aba =>
+      chrome.tabs.sendMessage(aba.id, { acao: 'tick' })
+        .then(() => true)
+        .catch(() => false)));
 
     const respostas = await Promise.all(abasPgt.map(aba =>
       chrome.tabs.sendMessage(aba.id, { acao: 'tick' })
@@ -116,7 +118,56 @@ async function enviarTick() {
 
     await verificarAbaPGT(abasPgt);
     await reanimarAbaPGT(abasPgt, respostas);
+    await reanimarAbaSei(abasSei, respostasSei);
+
+    // Abas abertas depois do inicio da execucao tambem precisam da protecao.
+    const ex = await GSEI.obter('execucao', null);
+    // sincroniza a protecao contra discard (inclusive a liberacao ao final)
+    await protegerAbas(!!(ex && ex.ativa));
   } catch (e) { console.warn('[Gerador SEI] enviarTick:', e); }
+}
+
+// A automacao morre se a aba for descartada (Memory Saver): o content script
+// some junto. Enquanto a execucao roda, as abas do SEI/PGT ficam com
+// autoDiscardable=false (coluna "Auto Discardable" do chrome://discards).
+async function protegerAbas(ativa) {
+  try {
+    const abas = await chrome.tabs.query({ url: [URL_SEI, URL_PGT] });
+    await Promise.all(abas.map(aba =>
+      chrome.tabs.update(aba.id, { autoDiscardable: !ativa }).catch(() => null)));
+  } catch (e) { console.warn('[Gerador SEI] protegerAbas:', e); }
+}
+
+let _ultimoReloadSei = 0;
+
+// Aba do SEI sem resposta ao tick: o content script morreu (extensao
+// recarregada com a pagina aberta) ou a aba esta congelada. Recarrega para
+// reinjetar o motor/descongelar; o estado volta do chrome.storage.local.
+async function reanimarAbaSei(abasSei, respostas) {
+  try {
+    if (!abasSei || !abasSei.length) return;
+    const ex = await GSEI.obter('execucao', null);
+    if (!ex || !ex.ativa || (ex.tipo !== 'gerar' && ex.tipo !== 'anexar')) return;
+    if (Date.now() - _ultimoReloadSei < 60000) return; // no maximo 1x por minuto
+
+    // Aba congelada nao executa nada (nem o tick remoto); recarregar e a
+    // unica forma de descongelar, pois nao existe API publica de unfreeze.
+    const congelada = abasSei.find(a => a.frozen && a.status !== 'loading');
+    if (congelada) {
+      _ultimoReloadSei = Date.now();
+      await chrome.tabs.reload(congelada.id);
+      await GSEI.registrar('Aba do SEI congelada pelo Chrome (freeze): recarregada', 'AVISO');
+      return;
+    }
+
+    if (respostas && respostas.some(r => r)) return;
+    const alvo = abasSei.find(a => a.status !== 'loading');
+    if (!alvo) return;
+
+    _ultimoReloadSei = Date.now();
+    await chrome.tabs.reload(alvo.id);
+    await GSEI.registrar('Aba do SEI sem motor ativo: pagina recarregada para reinjetar o script');
+  } catch (e) { console.warn('[Gerador SEI] reanimarAbaSei:', e); }
 }
 
 // Aba do PGT aberta mas ninguem responde o tick: o content script morreu
@@ -124,12 +175,21 @@ async function enviarTick() {
 async function reanimarAbaPGT(abasPgt, respostas) {
   try {
     if (!abasPgt || !abasPgt.length) return;
-    if (respostas && respostas.some(r => r)) return;
-    if (abasPgt[0].status === 'loading') return;
 
     const ex = await GSEI.obter('execucao', null);
     if (!ex || !ex.ativa || ex.tipo !== 'download') return;
     if (Date.now() - _ultimoReloadPgt < 60000) return; // no maximo 1x por minuto
+
+    const congelada = abasPgt.find(a => a.frozen && a.status !== 'loading');
+    if (congelada) {
+      _ultimoReloadPgt = Date.now();
+      await chrome.tabs.reload(congelada.id);
+      await GSEI.registrar('Aba do PGT congelada pelo Chrome (freeze): recarregada', 'AVISO');
+      return;
+    }
+
+    if (respostas && respostas.some(r => r)) return;
+    if (abasPgt[0].status === 'loading') return;
 
     _ultimoReloadPgt = Date.now();
     await chrome.tabs.reload(abasPgt[0].id);
@@ -178,6 +238,38 @@ function sanitizarNome(relativo) {
     .join('/');
 }
 
+// Nomes pedidos por nos via chrome.downloads.download: com um listener em
+// onDeterminingFilename registrado, o Chrome so mantem o nome pedido se o
+// proprio listener devolver - sem sugestao ele cai no nome da URL
+// (ex.: "relatorio.pdf" em vez de "arquivos_pgt/espelho.pdf").
+const _pedidos = new Map();
+
+function lembrarPedido(url, nome) {
+  const chave = String(url || '');
+  if (!chave) return;
+  _pedidos.set(chave, { nome, ts: Date.now() });
+  if (_pedidos.size > 30) {
+    for (const [k, v] of _pedidos) {
+      if (Date.now() - v.ts > 300000) _pedidos.delete(k);
+    }
+  }
+}
+
+function esquecerPedido(url) {
+  _pedidos.delete(String(url || ''));
+}
+
+// Consome o nome pedido para este download (finalUrl cobre redirecionamentos).
+function pegarPedido(item) {
+  const a = String(item && item.url || '');
+  const b = String(item && item.finalUrl || '');
+  const reg = _pedidos.get(a) || (b && b !== a ? _pedidos.get(b) : null);
+  if (!reg) return null;
+  _pedidos.delete(a);
+  if (b) _pedidos.delete(b);
+  return Date.now() - reg.ts > 300000 ? null : reg.nome;
+}
+
 async function baixarArquivo(msg) {
   const url = String(msg && msg.url || '');
   if (!/^https:\/\/pgt\.incra\.gov\.br\//i.test(url)) {
@@ -187,6 +279,7 @@ async function baixarArquivo(msg) {
   if (!filename.toLowerCase().endsWith('.pdf')) {
     return { ok: false, motivo: 'Nome de arquivo invalido (esperado .pdf)' };
   }
+  lembrarPedido(url, filename);
   try {
     const id = await chrome.downloads.download({
       url,
@@ -199,6 +292,7 @@ async function baixarArquivo(msg) {
     await GSEI.registrar(`DOWNLOAD solicitado: ${filename}`);
     return { ok: true, id };
   } catch (e) {
+    esquecerPedido(url);
     const motivo = String(e && e.message || e);
     await GSEI.registrar(`DOWNLOAD nao iniciado (${filename}): ${motivo}`, 'ERRO');
     return { ok: false, motivo };
@@ -215,15 +309,8 @@ function ehDownloadAceitavel(item) {
   return ehDownloadDoPgt(item.url) || ehDownloadDoPgt(item.finalUrl);
 }
 
-function nomeSeguro(nome) {
-  return String(nome || '')
-    .replace(/[<>:"|?*\\/]+/g, '_')
-    .replace(/^\.+$/, '_')
-    .trim() || 'espelho.pdf';
-}
-
-// Caminho dentro de "arquivos_pgt" mantendo o NOME ORIGINAL do arquivo
-// (ex.: unidade-familiar-1467635.pdf).
+// Caminho relativo ao diretorio de downloads: "arquivos_pgt/<nome original>"
+// (ex.: unidade-familiar-1467635.pdf). Caminho ja vindo da pasta e mantido.
 function caminhoNaPasta(atual) {
   if (!atual) return null;
   const ja = String(atual).replace(/\\/g, '/');
@@ -237,36 +324,56 @@ function caminhoNaPasta(atual) {
   return partes.join(sep);
 }
 
-// Intercepta o download no momento em que o Chrome define o arquivo: aponta
-// direto para "arquivos_pgt/<nome original>", sem precisar mover depois.
-chrome.downloads.onDeterminingFilename.addListener((item, sugerido, definir) => {
+// Sugestao de nome aceita pelo Chrome: relativa ao diretorio de downloads,
+// sem "..", sem caracteres invalidos e sempre dentro de "arquivos_pgt".
+function caminhoSugerido(sugestao) {
+  const limpo = String(sugestao || 'espelho.pdf')
+    .split(/[\\/]/)
+    .map(seg => seg.replace(/[<>:"|?*]+/g, '_').replace(/^\.+$/, '_').trim())
+    .filter(Boolean)
+    .join('/');
+  return caminhoNaPasta(limpo || 'espelho.pdf');
+}
+
+// Basename da URL do download, para quando item.filename ainda estiver vazio.
+function nomePelaUrl(item) {
   try {
-    if (!ehDownloadAceitavel(item)) {
-      definir(sugerido);
+    const bruto = String(item && (item.finalUrl || item.url) || '');
+    if (!bruto || /^blob:|^data:/i.test(bruto)) return '';
+    const u = new URL(bruto);
+    return decodeURIComponent(u.pathname.split('/').pop() || '');
+  } catch (e) { return ''; }
+}
+
+// Intercepta o download no momento em que o Chrome define o arquivo: aponta
+// direto para "arquivos_pgt/<nome original>". O 2o argumento do evento e a
+// FUNCAO de sugestao (nao uma string de nome) - por isso ele se chama
+// "sugerir" e recebe um OBJETO ({ filename, conflictAction }); o nome
+// provisorio do arquivo esta em item.filename. A sugestao e relativa a pasta
+// de downloads (caminho absoluto o Chrome ignora). A API nao tem
+// chrome.downloads.move, entao este e o unico ponto onde o destino pode ser
+// definido.
+chrome.downloads.onDeterminingFilename.addListener((item, sugerir) => {
+  // Nome provisorio que o Chrome gerou (pode vir como caminho absoluto).
+  const provisorio = String(item && item.filename || '');
+  const base = provisorio.split(/[\\/]/).pop() || nomePelaUrl(item);
+  try {
+    if (ehDownloadAceitavel(item)) {
+      // pedido (chrome.downloads.download) > provisorio > URL > espelho.pdf
+      const nome = pegarPedido(item) || base || 'espelho.pdf';
+      sugerir({ filename: caminhoSugerido(nome), conflictAction: 'uniquify' });
       return;
     }
-    definir(`${PASTA_DOWNLOADS}/${nomeSeguro(sugerido)}`);
+    // Fora do PGT: devolve o nome que o proprio Chrome ja tinha gerado, para
+    // nao mexer no download de ninguem (sem sugestao o nome pedido pelo
+    // chamador se perde quando ha listener registrado).
+    if (base) sugerir({ filename: base, conflictAction: 'uniquify' });
   } catch (e) {
-    try { definir(sugerido); } catch (e2) { /* ignora */ }
+    try {
+      if (base) sugerir({ filename: base, conflictAction: 'uniquify' });
+    } catch (e2) { /* ignora: o Chrome usa o nome provisorio */ }
   }
 });
-
-// Move para "arquivos_pgt"; se ja existir arquivo com o mesmo nome, tenta um
-// sufixo numerado antes de desistir.
-async function moverParaPasta(id, destino) {
-  const candidatos = [destino];
-  for (let i = 2; i <= 5; i++) {
-    candidatos.push(destino.replace(/(\.[^\\/.]+)?$/, ` (${i})$1`));
-  }
-  let erro = null;
-  for (const alvo of candidatos) {
-    try {
-      await chrome.downloads.move(id, alvo);
-      return alvo;
-    } catch (e) { erro = e; }
-  }
-  throw erro;
-}
 
 function caminhoRelativo(caminho) {
   const s = String(caminho || '');
@@ -274,7 +381,7 @@ function caminhoRelativo(caminho) {
   return i >= 0 ? s.slice(i) : s;
 }
 
-// Conclui um download detectado: move para a pasta do Gerador SEI e avisa o PGT.
+// Conclui um download detectado: confirma o destino e avisa o PGT.
 async function finalizarDownload(id, alteracao) {
   const meta = _baixando.get(id);
   if (!meta) return;
@@ -294,22 +401,20 @@ async function finalizarDownload(id, alteracao) {
 
   let arquivo = meta.arquivo || null;
   if (!arquivo) {
-    // Download disparado pela pagina do PGT: move para "arquivos_pgt".
-    let original = null;
+    // Download disparado pela pagina do PGT: o destino ja foi definido por
+    // onDeterminingFilename; aqui so confirmamos onde o Chrome gravou.
     try {
       const itens = await chrome.downloads.search({ id });
       const it = itens && itens[0];
-      original = (it && it.filename) || null;
-      if (original) {
-        const destino = caminhoNaPasta(original);
-        arquivo = (destino && destino !== original)
-          ? await moverParaPasta(id, destino)
-          : original;
+      arquivo = (it && it.filename) || null;
+      if (arquivo && caminhoNaPasta(arquivo) !== arquivo) {
+        await GSEI.registrar(
+          `DOWNLOAD salvo fora de ${PASTA_DOWNLOADS}: ${arquivo} (renomeie/mova manualmente)`, 'AVISO');
       }
     } catch (e) {
-      arquivo = original;
+      arquivo = arquivo || null;
       await GSEI.registrar(
-        `DOWNLOAD nao movido para ${PASTA_DOWNLOADS}: ${String(e && e.message || e)}`, 'ERRO');
+        `DOWNLOAD: caminho nao confirmado (${String(e && e.message || e)})`, 'AVISO');
     }
   }
 
@@ -329,10 +434,10 @@ async function estadoDeDownload(id) {
     const item = itens && itens[0];
     if (!item) return null;
     if (item.state === 'complete') {
-      return { item_id: null, ok: true, erro: null, arquivo: item.filename };
+      return { item_id: null, ok: true, erro: null, arquivo: caminhoRelativo(item.filename) };
     }
     if (item.state === 'interrupted') {
-      return { item_id: null, ok: false, erro: item.error || 'interrompido', arquivo: item.filename };
+      return { item_id: null, ok: false, erro: item.error || 'interrompido', arquivo: caminhoRelativo(item.filename) };
     }
     return null; // ainda em andamento
   } catch (e) {
@@ -375,7 +480,7 @@ async function notificarPgt(estado) {
 }
 
 // O clique em "Baixar relatorio" dispara o download pelo proprio navegador:
-// o background captura, move para "arquivos_pgt" e reporta.
+// o background identifica, confirma o destino em "arquivos_pgt" e reporta.
 async function registrarMeta(id, origem) {
   if (_baixando.has(id) || _baixados.has(id)) return null;
   try {
@@ -453,6 +558,8 @@ chrome.runtime.onInstalled.addListener(async () => {
   await atualizarBadge();
   const ex = await GSEI.obter('execucao', null);
   await agendarTick(!!(ex && ex.ativa));
+  // sincroniza a protecao contra discard (inclusive a liberacao ao final)
+  await protegerAbas(!!(ex && ex.ativa));
 });
 
 chrome.runtime.onStartup.addListener(async () => {
@@ -461,6 +568,8 @@ chrome.runtime.onStartup.addListener(async () => {
   await atualizarBadge();
   const ex = await GSEI.obter('execucao', null);
   await agendarTick(!!(ex && ex.ativa));
+  // sincroniza a protecao contra discard (inclusive a liberacao ao final)
+  await protegerAbas(!!(ex && ex.ativa));
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
@@ -476,6 +585,11 @@ chrome.storage.onChanged.addListener((mudancas, area) => {
     const ex = mudancas.execucao.newValue;
     atualizarBadge(ex);
     agendarTick(!!(ex && ex.ativa));
+    // Protege/desprotege so na virada de ativa (o restante das escritas em
+    // "execucao" acontece a cada passo); o tick de 30s cobre abas novas.
+    const antes = !!(mudancas.execucao.oldValue && mudancas.execucao.oldValue.ativa);
+    const agora = !!(ex && ex.ativa);
+    if (antes !== agora) protegerAbas(agora);
   }
   if (mudancas.keepalive) agendarKeepalive();
 });
@@ -527,5 +641,7 @@ inicializar()
     await atualizarBadge();
     const ex = await GSEI.obter('execucao', null);
     await agendarTick(!!(ex && ex.ativa));
+    // sincroniza a protecao contra discard (inclusive a liberacao ao final)
+    await protegerAbas(!!(ex && ex.ativa));
   })
   .catch(e => console.warn('[Gerador SEI] init:', e));
