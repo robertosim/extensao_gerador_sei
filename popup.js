@@ -206,8 +206,10 @@ function preencherSelect(el, itens, valor, semCodigo) {
 
 function carregarSelects() {
   preencherSelect($('#cfg-serie'), LISTAS.tiposDocumento, null, true);
-  preencherSelect($('#cfg-hipotese'), LISTAS.hipotesesLegais, null);
-  preencherSelect($('#cfg-hipotese-gerar'), LISTAS.hipotesesLegais, null);
+  // hipotese legal so com o texto: o codigo fica no value da option (e e ele
+  // que o passo 15 do SEI recebe), mas o numero nao aparece na lista
+  preencherSelect($('#cfg-hipotese'), LISTAS.hipotesesLegais, null, true);
+  preencherSelect($('#cfg-hipotese-gerar'), LISTAS.hipotesesLegais, null, true);
   preencherSelect($('#cfg-tipo-processo'), LISTAS.tiposProcesso, null, true);
 }
 
@@ -1121,47 +1123,54 @@ async function exportarRelatorio() {
 
 // ---------------------------------------------------------------- eventos
 
-function configurarEventos() {
-  $('#btn-salvar-cfg-anexo').addEventListener('click', salvarConfigAnexo);
-  $('#btn-salvar-cfg-geracao').addEventListener('click', salvarConfigGeracao);
+// Liga o evento so se o elemento existir: um botao que suma do HTML nao pode
+// derrubar as ligacoes seguintes (ja aconteceu: #btn-abrir-pgt sumiu e, por
+// isso, "Limpar log" e os demais botoes da funcao pararam de funcionar).
+function ao(sel, evento, tratador) {
+  const el = $(sel);
+  if (el) el.addEventListener(evento, tratador);
+  else console.warn('[Gerador SEI] elemento ausente, evento nao ligado:', sel);
+}
 
-  $('#pdfs-anexar').addEventListener('change', (e) => {
+function configurarEventos() {
+  ao('#btn-salvar-cfg-anexo', 'click', salvarConfigAnexo);
+  ao('#btn-salvar-cfg-geracao', 'click', salvarConfigGeracao);
+
+  ao('#pdfs-anexar', 'change', (e) => {
     const arquivos = Array.from(e.target.files || []);
     if (arquivos.length) carregarPdfs(arquivos);
     e.target.value = '';
   });
-  $('#csv-gerar').addEventListener('change', (e) => {
+  ao('#csv-gerar', 'change', (e) => {
     const arquivo = e.target.files && e.target.files[0];
     if (arquivo) carregarCsvGerar(arquivo);
     e.target.value = '';
   });
 
-  $('#btn-iniciar-anexar').addEventListener('click', async () => {
+  ao('#btn-iniciar-anexar', 'click', async () => {
     if (await pausarOuRetomar('anexar')) return;
     await iniciar('anexar');
   });
-  $('#btn-cancelar-anexar').addEventListener('click', () => cancelarExecucao('anexar'));
-  $('#btn-abrir-sei-anexar').addEventListener('click', () => garantirAbaSEI(true));
-  $('#btn-iniciar-gerar').addEventListener('click', async () => {
+  ao('#btn-cancelar-anexar', 'click', () => cancelarExecucao('anexar'));
+  ao('#btn-iniciar-gerar', 'click', async () => {
     if (await pausarOuRetomar('gerar')) return;
     await iniciar('gerar');
   });
-  $('#btn-cancelar-gerar').addEventListener('click', () => cancelarExecucao('gerar'));
-  $('#btn-baixar-espelho').addEventListener('click', async () => {
+  ao('#btn-cancelar-gerar', 'click', () => cancelarExecucao('gerar'));
+  ao('#btn-baixar-espelho', 'click', async () => {
     if (await pausarOuRetomar('download')) return;
     await iniciar('download');
   });
-  $('#btn-cancelar-download').addEventListener('click', cancelarFilaDownload);
-  $('#btn-retry-download').addEventListener('click', async () => {
+  ao('#btn-cancelar-download', 'click', cancelarFilaDownload);
+  ao('#btn-retry-download', 'click', async () => {
     await repetirFalhas('download');
     await iniciar('download');
   });
-  $('#btn-abrir-pgt').addEventListener('click', () => garantirAbaPGT(true, true));
 
-  $('#btn-retry-anexar').addEventListener('click', () => repetirFalhas('anexar'));
-  $('#btn-retry-gerar').addEventListener('click', () => repetirFalhas('gerar'));
+  ao('#btn-retry-anexar', 'click', () => repetirFalhas('anexar'));
+  ao('#btn-retry-gerar', 'click', () => repetirFalhas('gerar'));
 
-  $('#btn-limpar-anexar').addEventListener('click', () => {
+  ao('#btn-limpar-anexar', 'click', () => {
     confirmar('limpar-anexar', 'Limpar', async () => {
       await GSEI.definir('registros', []);
       await GSEI.registrar('Registros de anexacao limpos pelo usuario');
@@ -1169,7 +1178,7 @@ function configurarEventos() {
       toast('Registros limpos');
     });
   });
-  $('#btn-limpar-gerar').addEventListener('click', () => {
+  ao('#btn-limpar-gerar', 'click', () => {
     confirmar('limpar-gerar', 'Limpar', async () => {
       await GSEI.definir('fila', []);
       await GSEI.registrar('Fila de geracao limpa pelo usuario');
@@ -1178,8 +1187,8 @@ function configurarEventos() {
       toast('Fila limpa');
     });
   });
-  $('#btn-exportar-gerar').addEventListener('click', exportarRelatorio);
-  $('#btn-limpar-log').addEventListener('click', async () => {
+  ao('#btn-exportar-gerar', 'click', exportarRelatorio);
+  ao('#btn-limpar-log', 'click', async () => {
     await GSEI.limparLog();
     await renderLog();
     toast('Log limpo');
@@ -1187,9 +1196,9 @@ function configurarEventos() {
 
   for (const alvo of Object.keys(GSEI.CHAVES_KEEPALIVE)) {
     const ids = idsKeepalive(alvo);
-    $('#' + ids.ativo).addEventListener('change', () => salvarKeepalive(alvo));
-    $('#' + ids.intervalo).addEventListener('change', () => salvarKeepalive(alvo));
-    $('#' + ids.agora).addEventListener('click', () => recarregarAgora(alvo));
+    ao('#' + ids.ativo, 'change', () => salvarKeepalive(alvo));
+    ao('#' + ids.intervalo, 'change', () => salvarKeepalive(alvo));
+    ao('#' + ids.agora, 'click', () => recarregarAgora(alvo));
   }
 }
 

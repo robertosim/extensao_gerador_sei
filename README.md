@@ -83,11 +83,17 @@ quadro de Pendências aponta o registro.
   freeze), as abas do SEI/PGT ficam `autoDiscardable=false` enquanto a execução
   roda e uma aba que para de responder é recarregada (o estado sai do
   `chrome.storage.local`); os eventos de freeze/resume entram no **Log**
+- Os botões do painel são ligados por um helper que só registra o evento quando
+  o elemento existe (e avisa no console) — um botão que suma do HTML não derruba
+  os demais
 
 ## Padrões
 
 - **Tipo do processo**: `100000508` — *Finalístico: Desenvolvimento de
   Assentamentos* (pré-selecionado; troque na aba Gerar)
+- **Listas suspensas**: tipo do processo, tipo do documento e **hipótese legal**
+  mostram **só o texto** (sem o número na frente); o código continua no `value`
+  da opção e é ele que o SEI recebe
 - **Colunas do CSV**: código do beneficiário, nome do titular 1 e nº do processo
   SEI (aceita `;` ou `,`, UTF-8/CP1252/Latin-1)
 - **Espelhos**: `Downloads/arquivos_pgt/<nome original do arquivo>` (o nome vem do
