@@ -264,10 +264,44 @@ footer {
   padding: 8px 12px;
 }
 .rodape { margin-top: 0; justify-content: space-between; }
+
+/* credito no rodape */
+.footer {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--borda);
+  text-align: center;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--cinza-medio);
+}
+.footer a { color: var(--azul); text-decoration: none; }
+.footer a:hover { text-decoration: underline; }
 .check { display: flex; align-items: center; gap: 5px; font-weight: 600; font-size: 12px; }
 .intervalo { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--cinza-medio); }
 .intervalo input { width: 58px; text-align: center; }
 .ka-status { font-size: 10.5px; color: var(--cinza-medio); margin-top: 4px; min-height: 13px; }
+
+/* keep-alive: duas linhas independentes (SEI e PGT) */
+.ka-linha {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ka-linha + .ka-linha {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--borda);
+}
+.ka-linha .ka-status { flex: 1 0 100%; margin-top: 0; }
+
+/* diagnostico de pendencias da aba Anexar */
+.pendencias { background: var(--aviso-bg); }
+.pend-resumo { font-weight: 600; }
+.pend-lista { margin-top: 4px; max-height: 84px; overflow: auto; }
+.pend-item { font-size: 11px; color: var(--cinza-medio); }
+.prev-tpl { color: var(--cinza-medio); }
 
 /* toast */
 .toast {

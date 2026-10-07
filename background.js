@@ -2,7 +2,7 @@
 //
 // Responsabilidades:
 //   * inicializar chaves padrao do chrome.storage.local;
-//   * keep-alive da aba do SEI (alarms) - recarrega a aba quando ocioso;
+//   * keep-alive das abas do SEI e do PGT (alarms independentes);
 //   * badge do icone com o progresso da execucao;
 //   * responder mensagens do popup (keep-alive).
 //
@@ -12,10 +12,24 @@
 importScripts('comum.js');
 
 const ALARME_KEEPALIVE = 'gsei-keepalive';
+const ALARME_KEEPALIVE_PGT = 'gsei-keepalive-pgt';
 const ALARME_TICK = 'gsei-tick';
 const SEI_URL = 'https://sei.incra.gov.br/sei';
 const URL_SEI = 'https://sei.incra.gov.br/*';
 const URL_PGT = 'https://pgt.incra.gov.br/*';
+const PGT_URL = 'https://pgt.incra.gov.br/sipra/beneficiario';
+
+// Dois keep-alives independentes (SEI e PGT): mesma chave/rotulo em todo o
+// codigo (GSEI.CHAVES_KEEPALIVE). O nome do alarme do SEI nao muda para nao
+// perder a preferencia ja gravada em instalacoes existentes.
+const ALVOS_KEEPALIVE = {
+  sei: { rotulo: 'SEI', alarme: ALARME_KEEPALIVE, url: SEI_URL, padrao: URL_SEI },
+  pgt: { rotulo: 'PGT', alarme: ALARME_KEEPALIVE_PGT, url: PGT_URL, padrao: URL_PGT }
+};
+
+function alvoKeepalive(alvo) {
+  return ALVOS_KEEPALIVE[alvo] || ALVOS_KEEPALIVE.sei;
+}
 
 async function inicializar() {
   const padroes = {
@@ -24,6 +38,7 @@ async function inicializar() {
     pdfs: {},
     log: [],
     keepalive: GSEI.PADRAO_KEEPALIVE,
+    keepalive_pgt: GSEI.PADRAO_KEEPALIVE,
     execucao: null
   };
   const atuais = await chrome.storage.local.get(Object.keys(padroes));
@@ -35,24 +50,30 @@ async function inicializar() {
 }
 
 async function agendarKeepalive() {
-  const ka = await GSEI.obter('keepalive', GSEI.PADRAO_KEEPALIVE);
-  const segundos = Math.max(30, Number(ka.intervalo) || 60);
-  await chrome.alarms.create(ALARME_KEEPALIVE, { periodInMinutes: segundos / 60 });
+  for (const alvo of Object.keys(GSEI.CHAVES_KEEPALIVE)) {
+    const ka = await GSEI.obterKeepalive(alvo);
+    const segundos = Math.max(30, Number(ka.intervalo) || 60);
+    await chrome.alarms.create(alvoKeepalive(alvo).alarme,
+      { periodInMinutes: segundos / 60 });
+  }
 }
 
-async function keepaliveUmaVez(origem) {
-  const ka = await GSEI.obter('keepalive', GSEI.PADRAO_KEEPALIVE);
+async function keepaliveUmaVez(alvo, origem) {
+  const meta = alvoKeepalive(alvo);
+  const rotulo = meta.rotulo;
+  const prefixo = `KEEPALIVE${alvo === 'pgt' ? ' PGT' : ''}`;
+  const ka = await GSEI.obterKeepalive(alvo);
   if (!ka.ativo) return { ok: false, motivo: 'desativado' };
 
   const ex = await GSEI.obter('execucao', null);
   if (ex && ex.ativa) {
-    await GSEI.atualizar('keepalive', GSEI.PADRAO_KEEPALIVE,
+    await GSEI.atualizarKeepalive(alvo,
       { ultimo_erro: 'Pausado: execucao em andamento' });
     return { ok: false, motivo: 'ocupado' };
   }
 
   try {
-    const abas = await chrome.tabs.query({ url: URL_SEI });
+    const abas = await chrome.tabs.query({ url: meta.padrao });
     const agora = new Date().toLocaleString('pt-BR');
 
     if (abas.length) {
@@ -60,30 +81,30 @@ async function keepaliveUmaVez(origem) {
       const url = aba.url || '';
       const expirada = /login/i.test(url);
       await chrome.tabs.reload(aba.id);
-      await GSEI.atualizar('keepalive', GSEI.PADRAO_KEEPALIVE, {
+      await GSEI.atualizarKeepalive(alvo, {
         ultima_recarga: agora,
         recargas: (Number(ka.recargas) || 0) + 1,
         ultimo_url: url,
         ultimo_erro: expirada ? 'Sessao expirada (redirecionou para login)' : null
       });
       await GSEI.registrar(expirada
-        ? 'KEEPALIVE: AVISO - aba do SEI em pagina de login; refazer login manualmente'
-        : `KEEPALIVE: aba recarregada${origem ? ' (' + origem + ')' : ''}: ${url.slice(0, 80)}`);
+        ? `${prefixo}: AVISO - aba do ${rotulo} em pagina de login; refazer login manualmente`
+        : `${prefixo}: aba recarregada${origem ? ' (' + origem + ')' : ''}: ${url.slice(0, 80)}`);
       return { ok: true, url };
     }
 
-    await chrome.tabs.create({ url: SEI_URL });
-    await GSEI.atualizar('keepalive', GSEI.PADRAO_KEEPALIVE, {
+    await chrome.tabs.create({ url: meta.url });
+    await GSEI.atualizarKeepalive(alvo, {
       ultima_recarga: agora,
       recargas: (Number(ka.recargas) || 0) + 1,
-      ultimo_url: SEI_URL,
+      ultimo_url: meta.url,
       ultimo_erro: null
     });
-    await GSEI.registrar('KEEPALIVE: nenhuma aba do SEI aberta: criando uma');
-    return { ok: true, url: SEI_URL };
+    await GSEI.registrar(`${prefixo}: nenhuma aba do ${rotulo} aberta: criando uma`);
+    return { ok: true, url: meta.url };
   } catch (e) {
-    await GSEI.atualizar('keepalive', GSEI.PADRAO_KEEPALIVE, { ultimo_erro: String(e && e.message || e) });
-    await GSEI.registrar(`KEEPALIVE: erro ao recarregar SEI: ${e}`, 'ERRO');
+    await GSEI.atualizarKeepalive(alvo, { ultimo_erro: String(e && e.message || e) });
+    await GSEI.registrar(`${prefixo}: erro ao recarregar ${rotulo}: ${e}`, 'ERRO');
     return { ok: false, motivo: String(e && e.message || e) };
   }
 }
@@ -574,7 +595,8 @@ chrome.runtime.onStartup.addListener(async () => {
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   try {
-    if (alarm.name === ALARME_KEEPALIVE) await keepaliveUmaVez('alarme');
+    if (alarm.name === ALARME_KEEPALIVE) await keepaliveUmaVez('sei', 'alarme');
+    else if (alarm.name === ALARME_KEEPALIVE_PGT) await keepaliveUmaVez('pgt', 'alarme');
     else if (alarm.name === ALARME_TICK) await enviarTick();
   } catch (e) { console.warn('[Gerador SEI] alarme:', alarm.name, e); }
 });
@@ -591,7 +613,7 @@ chrome.storage.onChanged.addListener((mudancas, area) => {
     const agora = !!(ex && ex.ativa);
     if (antes !== agora) protegerAbas(agora);
   }
-  if (mudancas.keepalive) agendarKeepalive();
+  if (mudancas.keepalive || mudancas.keepalive_pgt) agendarKeepalive();
 });
 
 chrome.runtime.onMessage.addListener((mensagem, remetente, responder) => {
@@ -615,7 +637,9 @@ chrome.runtime.onMessage.addListener((mensagem, remetente, responder) => {
   }
 
   if (mensagem.acao === 'keepalive-agora') {
-    keepaliveUmaVez('manual').then(responder).catch(e => responder({ ok: false, motivo: String(e) }));
+    keepaliveUmaVez(mensagem.alvo || 'sei', 'manual')
+      .then(responder)
+      .catch(e => responder({ ok: false, motivo: String(e) }));
     return true; // resposta assincrona
   }
 
@@ -627,8 +651,10 @@ chrome.runtime.onMessage.addListener((mensagem, remetente, responder) => {
   if (mensagem.acao === 'status') {
     Promise.all([
       GSEI.obter('execucao', null),
-      GSEI.obter('keepalive', GSEI.PADRAO_KEEPALIVE)
-    ]).then(([execucao, keepalive]) => responder({ ok: true, execucao, keepalive }));
+      GSEI.obterKeepalive('sei'),
+      GSEI.obterKeepalive('pgt')
+    ]).then(([execucao, keepalive, keepalive_pgt]) =>
+      responder({ ok: true, execucao, keepalive, keepalive_pgt }));
     return true;
   }
 

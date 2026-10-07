@@ -216,7 +216,9 @@ function carregarSelects() {
 async function carregarConfigAnexo() {
   const cfg = Object.assign({}, GSEI.PADRAO_ANEXO, await GSEI.obter('cfg_anexo', {}));
   $('#cfg-serie').value = String(cfg.serie || '');
-  $('#cfg-sigilo').value = String(cfg.sigilo || 'R');
+  // campo sem select no HTML: o valor ja gravado continua valendo
+  const campoSigilo = $('#cfg-sigilo');
+  if (campoSigilo) campoSigilo.value = String(cfg.sigilo || 'R');
   $('#cfg-nome-arvore').value = cfg.nome_arvore || '';
   $('#cfg-hipotese').value = String(cfg.hipotese || '');
   $('#cfg-nivel').value = String(cfg.nivel || '1');
@@ -241,9 +243,12 @@ async function carregarConfigGeracao() {
 }
 
 async function salvarConfigAnexo() {
+  const anterior = await GSEI.obter('cfg_anexo', {});
+  const campoSigilo = $('#cfg-sigilo');
   const cfg = {
     serie: $('#cfg-serie').value,
-    sigilo: $('#cfg-sigilo').value,
+    // sem select no HTML: preserva o valor anterior (padrao 'R')
+    sigilo: campoSigilo ? campoSigilo.value : String(anterior.sigilo || GSEI.PADRAO_ANEXO.sigilo),
     nome_arvore: $('#cfg-nome-arvore').value.trim(),
     hipotese: $('#cfg-hipotese').value,
     nivel: $('#cfg-nivel').value
@@ -278,7 +283,9 @@ async function salvarConfigGeracao() {
 // -------------------------------------------------------------- CSV / PDF
 
 // Os registros da anexacao vem do CSV carregado na aba Gerar SEI (fila)
-// cruzado com os PDFs escolhidos aqui. Mantem o status de quem ja foi anexado.
+// cruzado com os PDFs escolhidos aqui. Mantem o status de quem ja foi anexado
+// e o dados_csv (colunas do CSV) que resolve os coringas {{...}} da aba
+// Anexar. Trocar/remover o PDF zera o anexo e a data_anexo.
 async function sincronizarRegistros() {
   const fila = await GSEI.obter('fila', []);
   const pdfs = await GSEI.obter('pdfs', {});
@@ -295,16 +302,21 @@ async function sincronizarRegistros() {
     vistos.add(cod);
     const anterior = porCod.get(cod) || {};
     const pdf = pdfs[cod];
-    registros.push({
+    const pdfAnterior = anterior.pdf_anexo || '';
+    const pdfNovo = (pdf && pdf.nome) || pdfAnterior || '';
+    const trocouPdf = String(pdfNovo) !== String(pdfAnterior);
+    registros.push(Object.assign({}, anterior, {
       id: 'r' + cod,
       cod_sipra: cod,
       nome: f.nome || anterior.nome || '',
       processo_sei: f.processo_sei_original || f.processo_gerado
         || anterior.processo_sei || '',
-      pdf_anexo: (pdf && pdf.nome) || anterior.pdf_anexo || '',
-      anexado: anterior.anexado === undefined ? 0 : anterior.anexado,
-      data_anexo: anterior.data_anexo || null
-    });
+      // colunas do CSV (JSON) alimentam os coringas do nome na arvore
+      dados_csv: f.dados_csv || anterior.dados_csv || null,
+      pdf_anexo: pdfNovo,
+      anexado: trocouPdf ? 0 : (anterior.anexado === undefined ? 0 : anterior.anexado),
+      data_anexo: trocouPdf ? null : (anterior.data_anexo || null)
+    }));
   }
 
   for (const r of atuais) {
@@ -312,8 +324,13 @@ async function sincronizarRegistros() {
     if (!cod || vistos.has(cod)) continue;
     vistos.add(cod);
     const pdf = pdfs[cod];
+    const pdfAnterior = r.pdf_anexo || '';
+    const pdfNovo = (pdf && pdf.nome) || pdfAnterior || '';
+    const trocouPdf = String(pdfNovo) !== String(pdfAnterior);
     registros.push(Object.assign({}, r, {
-      pdf_anexo: (pdf && pdf.nome) || r.pdf_anexo || ''
+      pdf_anexo: pdfNovo,
+      anexado: trocouPdf ? 0 : r.anexado,
+      data_anexo: trocouPdf ? null : (r.data_anexo || null)
     }));
   }
 
@@ -429,6 +446,9 @@ async function carregarCsvGerar(arquivo) {
         existente.processo_sei_original = cProc ? (linha[cProc] || '').trim() : '';
         existente.dados_csv = JSON.stringify(dados);
         existente.erro = null;
+        // status NULL = placeholder criado pela aba Anexar: com o CSV da
+        // Geracao ele vira pendente (0) e entra na fila junto com os demais.
+        if (existente.status === null || existente.status === undefined) existente.status = 0;
         atualizados++;
       } else {
         ignorados++;
@@ -455,6 +475,7 @@ async function carregarCsvGerar(arquivo) {
 
 async function renderRegistros() {
   const registros = await GSEI.obter('registros', []);
+  const cfg = Object.assign({}, GSEI.PADRAO_ANEXO, await GSEI.obter('cfg_anexo', {}));
   const stats = GSEI.calcularStats(registros);
   const pendentes = registros.filter(r =>
     (r.anexado === 0 || r.anexado === -1)
@@ -468,6 +489,9 @@ async function renderRegistros() {
     + `&nbsp;|&nbsp; Com processo SEI: <b>${stats.com_processo}</b> `
     + `&nbsp;|&nbsp; Prontos: <b>${pendentes}</b>`);
 
+  renderPendenciasAnexar(registros, cfg);
+  renderPreviewNomeArvore(registros, cfg);
+
   $('#contagem-anexar').textContent = registros.length ? `(${registros.length})` : '';
   const visiveis = registros.slice(0, LIMITE_TABELA);
   aplicarHtml($('#tabela-anexar'), visiveis.map(r => {
@@ -477,8 +501,47 @@ async function renderRegistros() {
     else if (!(r.pdf_anexo || '').trim()) { classe = 'err'; texto = 'Sem PDF'; }
     else if (!(r.processo_sei || '').trim()) { classe = 'err'; texto = 'Sem processo'; }
     return `<tr><td>${esc(r.cod_sipra)}</td><td>${esc(r.processo_sei)}</td>`
-      + `<td>${esc(r.pdf_anexo)}</td><td class="sit ${classe}">${texto}</td></tr>`;
-  }).join('') || '<tr><td colspan="4">Sem registros. Carregue o CSV na aba Gerar SEI e os PDFs aqui.</td></tr>');
+      + `<td>${esc(r.pdf_anexo)}</td><td>${esc(r.data_anexo || '')}</td>`
+      + `<td class="sit ${classe}">${texto}</td></tr>`;
+  }).join('') || '<tr><td colspan="5">Sem registros. Carregue o CSV na aba Gerar SEI e os PDFs aqui.</td></tr>');
+}
+
+// Diagnostico de pendencias: o que falta por registro antes de anexar
+// (sem PDF, sem NUP, coringa sem dado), mais o resumo que bloqueia a fila.
+function renderPendenciasAnexar(registros, cfg) {
+  const el = $('#pendencias-anexar');
+  if (!el) return;
+  if (!registros.length) {
+    aplicarHtml(el, 'Pendencias: carregue o CSV para ver o que falta por registro.');
+    return;
+  }
+  const resumo = GSEI.diagnosticoPendencias(registros);
+  const lista = GSEI.pendenciasRegistros(registros, cfg);
+  const linhas = lista.slice(0, 12).map(p =>
+    `<div class="pend-item"><b>${esc(p.cod || '-')}</b>: ${esc(p.faltas.join(' | '))}</div>`);
+  if (lista.length > 12) linhas.push(`<div>... e mais ${lista.length - 12} registro(s)</div>`);
+  aplicarHtml(el,
+    `<div class="pend-resumo">${esc(resumo)}</div>`
+    + (linhas.length ? `<div class="pend-lista">${linhas.join('')}</div>` : ''));
+}
+
+// Preview do nome na arvore ja com os coringas resolvidos (nao grava nada:
+// e so a leitura do template com o primeiro registro pendente).
+function renderPreviewNomeArvore(registros, cfg) {
+  const el = $('#preview-nome-arvore');
+  if (!el) return;
+  const alvo = registros.find(r => r.anexado !== 1)
+    || registros[0] || null;
+  const template = ((alvo && alvo.nome_arvore) || '').trim() || (cfg.nome_arvore || '').trim();
+  if (!template || !alvo) {
+    aplicarHtml(el, template
+      ? 'Preview aparece apos carregar o CSV.'
+      : 'Sem template configurado.');
+    return;
+  }
+  aplicarHtml(el,
+    `<span class="prev-tpl">${esc(template)}</span> &rarr; `
+    + `<b>${esc(GSEI.processarNomeArvore(template, alvo))}</b>`);
 }
 
 async function renderFila() {
@@ -747,14 +810,59 @@ function renderPainelAnexar(ex) {
   }
 }
 
-async function renderKeepalive() {
-  const ka = await GSEI.obter('keepalive', GSEI.PADRAO_KEEPALIVE);
-  $('#ka-ativo').checked = !!ka.ativo;
-  $('#ka-intervalo').value = Number(ka.intervalo) || 60;
-  const status = $('#ka-status');
+// ------------------------------------------------------------- keep-alive
+// Dois keep-alives independentes (SEI e PGT): cada alvo tem seus proprios
+// elementos no rodape e sua propria chave no chrome.storage.local.
+
+const KA_ROTULO = { sei: 'SEI', pgt: 'PGT' };
+
+function idsKeepalive(alvo) {
+  return alvo === 'pgt'
+    ? { ativo: 'ka-pgt-ativo', intervalo: 'ka-pgt-intervalo', status: 'ka-pgt-status', agora: 'btn-ka-pgt-agora' }
+    : { ativo: 'ka-ativo', intervalo: 'ka-intervalo', status: 'ka-status', agora: 'btn-ka-agora' };
+}
+
+function renderKeepaliveAlvo(alvo, ka) {
+  const ids = idsKeepalive(alvo);
+  const check = $('#' + ids.ativo);
+  const campo = $('#' + ids.intervalo);
+  const status = $('#' + ids.status);
+  if (!check || !campo || !status) return;
+  check.checked = !!ka.ativo;
+  campo.value = Number(ka.intervalo) || 60;
   if (ka.ultimo_erro) status.textContent = `Aviso: ${ka.ultimo_erro}`;
   else if (ka.ultima_recarga) status.textContent = `Ultima recarga: ${ka.ultima_recarga} (${ka.recargas || 0}x)`;
-  else status.textContent = 'Keep-alive sem execucao ainda.';
+  else status.textContent = `Keep-alive do ${KA_ROTULO[alvo]} sem execucao ainda.`;
+}
+
+async function renderKeepalive() {
+  for (const alvo of Object.keys(GSEI.CHAVES_KEEPALIVE)) {
+    renderKeepaliveAlvo(alvo, await GSEI.obterKeepalive(alvo));
+  }
+}
+
+async function salvarKeepalive(alvo) {
+  const ids = idsKeepalive(alvo);
+  const intervalo = Math.max(30, Number($('#' + ids.intervalo).value) || 60);
+  $('#' + ids.intervalo).value = intervalo;
+  const ka = await GSEI.atualizarKeepalive(alvo, {
+    ativo: $('#' + ids.ativo).checked,
+    intervalo: intervalo
+  });
+  chrome.runtime.sendMessage({ acao: 'configurar-keepalive', alvo: alvo },
+    () => void chrome.runtime.lastError);
+  await GSEI.registrar(`Keep-alive do ${KA_ROTULO[alvo]} ${ka.ativo ? 'ativado' : 'desativado'} `
+    + `(intervalo ${intervalo}s)`);
+  renderKeepaliveAlvo(alvo, ka);
+}
+
+function recarregarAgora(alvo) {
+  chrome.runtime.sendMessage({ acao: 'keepalive-agora', alvo: alvo }, (resposta) => {
+    void chrome.runtime.lastError;
+    if (resposta && resposta.ok) toast(`Aba do ${KA_ROTULO[alvo]} recarregada`);
+    else toast(`Keep-alive ${KA_ROTULO[alvo]}: ` + ((resposta && resposta.motivo) || 'sem resposta'));
+    renderKeepalive();
+  });
 }
 
 // --------------------------------------------------------------- execucao
@@ -773,7 +881,8 @@ async function iniciar(tipo) {
   if (tipo === 'anexar') {
     const registros = await GSEI.obter('registros', []);
     const n = pendentesAnexar(registros);
-    if (!n) { marcarMsg($('#aviso-anexar'), 'Nenhum registro pronto: carregue o CSV na aba Gerar SEI, os PDFs e informe o processo SEI.', 'erro'); return; }
+    // sem registro pronto: o diagnostico explica o que falta por registro
+    if (!n) { marcarMsg($('#aviso-anexar'), GSEI.diagnosticoPendencias(registros), 'erro'); return; }
     const cfg = Object.assign({}, GSEI.PADRAO_ANEXO, await GSEI.obter('cfg_anexo', {}));
     if (!cfg.serie) { marcarMsg($('#aviso-anexar'), 'Configure o tipo do documento antes de iniciar.', 'erro'); return; }
     await iniciarExecucao('anexar', n);
@@ -917,7 +1026,8 @@ async function repetirFalhas(tipo) {
   if (tipo === 'anexar') {
     const registros = await GSEI.obter('registros', []);
     const n = registros.filter(r => r.anexado === -1).length;
-    registros.forEach(r => { if (r.anexado === -1) r.anexado = 0; });
+    // falha volta para a fila e a data_anexo e zerada (como no app)
+    registros.forEach(r => { if (r.anexado === -1) { r.anexado = 0; r.data_anexo = null; } });
     await GSEI.definir('registros', registros);
     await renderRegistros();
     toast(n ? `${n} falha(s) marcada(s) para repetir` : 'Nenhuma falha para repetir');
@@ -1009,29 +1119,6 @@ async function exportarRelatorio() {
   toast('Relatorio relatorio_gerador_sei.csv gerado');
 }
 
-// ------------------------------------------------------------- keep-alive
-
-async function salvarKeepalive() {
-  const intervalo = Math.max(30, Number($('#ka-intervalo').value) || 60);
-  $('#ka-intervalo').value = intervalo;
-  const ka = await GSEI.atualizar('keepalive', GSEI.PADRAO_KEEPALIVE, {
-    ativo: $('#ka-ativo').checked,
-    intervalo: intervalo
-  });
-  chrome.runtime.sendMessage({ acao: 'configurar-keepalive' }, () => void chrome.runtime.lastError);
-  await GSEI.registrar(`Keep-alive ${ka.ativo ? 'ativado' : 'desativado'} (intervalo ${intervalo}s)`);
-  await renderKeepalive();
-}
-
-function recarregarAgora() {
-  chrome.runtime.sendMessage({ acao: 'keepalive-agora' }, (resposta) => {
-    void chrome.runtime.lastError;
-    if (resposta && resposta.ok) toast('Aba do SEI recarregada');
-    else toast('Keep-alive: ' + ((resposta && resposta.motivo) || 'sem resposta'));
-    renderKeepalive();
-  });
-}
-
 // ---------------------------------------------------------------- eventos
 
 function configurarEventos() {
@@ -1098,9 +1185,12 @@ function configurarEventos() {
     toast('Log limpo');
   });
 
-  $('#ka-ativo').addEventListener('change', salvarKeepalive);
-  $('#ka-intervalo').addEventListener('change', salvarKeepalive);
-  $('#btn-ka-agora').addEventListener('click', recarregarAgora);
+  for (const alvo of Object.keys(GSEI.CHAVES_KEEPALIVE)) {
+    const ids = idsKeepalive(alvo);
+    $('#' + ids.ativo).addEventListener('change', () => salvarKeepalive(alvo));
+    $('#' + ids.intervalo).addEventListener('change', () => salvarKeepalive(alvo));
+    $('#' + ids.agora).addEventListener('click', () => recarregarAgora(alvo));
+  }
 }
 
 function iniciarMonitoramento() {
@@ -1138,7 +1228,7 @@ async function iniciarPopup() {
     if (mudancas.registros) secoes.push('registros');
     if (mudancas.fila) secoes.push('fila', 'downloads');
     if (mudancas.execucao) secoes.push('execucao', 'downloads');
-    if (mudancas.keepalive) secoes.push('keepalive');
+    if (mudancas.keepalive || mudancas.keepalive_pgt) secoes.push('keepalive');
     if (secoes.length) agendarRender(secoes);
   });
 

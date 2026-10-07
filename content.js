@@ -254,14 +254,17 @@ async function montarContexto(ex) {
     ctx.registro = fila.find(r => r.id === ex.item_id) || null;
     ctx.cfg = Object.assign({}, GSEI.PADRAO_GERACAO,
       await GSEI.obter('cfg_geracao', {}));
-    ctx.dados = {};
     if (ctx.registro) {
-      try { ctx.dados = JSON.parse(ctx.registro.dados_csv || '{}') || {}; }
-      catch (e) { ctx.dados = {}; }
+      // os templates resolvem colunas da tabela, do CSV (dados_csv) e
+      // apelidos, tudo a partir do proprio registro
+      ctx.especificacao = GSEI.renderizarTemplate(ctx.cfg.especificacao, ctx.registro);
+      ctx.interessados = GSEI.renderizarTemplate(ctx.cfg.interessados, ctx.registro);
+      ctx.observacoes = GSEI.renderizarTemplate(ctx.cfg.observacoes, ctx.registro);
+    } else {
+      ctx.especificacao = GSEI.renderizarTemplate(ctx.cfg.especificacao, {});
+      ctx.interessados = GSEI.renderizarTemplate(ctx.cfg.interessados, {});
+      ctx.observacoes = GSEI.renderizarTemplate(ctx.cfg.observacoes, {});
     }
-    ctx.especificacao = GSEI.renderizarTemplate(ctx.cfg.especificacao, ctx.dados);
-    ctx.interessados = GSEI.renderizarTemplate(ctx.cfg.interessados, ctx.dados);
-    ctx.observacoes = GSEI.renderizarTemplate(ctx.cfg.observacoes, ctx.dados);
     ctx.nivel = GSEI.NIVEIS[String(ctx.cfg.nivel_acesso)] || GSEI.NIVEIS['1'];
   }
   return ctx;
@@ -796,7 +799,8 @@ async function falhaItem(msg, global) {
   if (ex.tipo === 'anexar') {
     const registros = await GSEI.obter('registros', []);
     const alvo = registros.find(r => r.id === ex.item_id);
-    if (alvo) alvo.anexado = -1;
+    // falha zera a data_anexo (a coluna so mostra data de anexo de sucesso)
+    if (alvo) { alvo.anexado = -1; alvo.data_anexo = null; }
     await GSEI.definir('registros', registros);
   } else {
     const fila = await GSEI.obter('fila', []);

@@ -34,7 +34,6 @@
         <button id="btn-baixar-espelho" class="primario">Baixar</button>
         <button id="btn-cancelar-download" class="perigo">Cancelar</button>
         <button id="btn-retry-download" class="secundario oculto">Executar novamente (erros)</button>
-        <button id="btn-abrir-pgt" class="secundario">Abrir aba do PGT</button>
       </div>
       <div id="progresso-download" class="progresso oculto">
         <div class="barra barra-progresso">
@@ -65,8 +64,9 @@
           <select id="cfg-serie"></select>
         </label>
         <label class="campo largo">
-          <span>Nome na arvore ({{coringas}})</span>
-          <input type="text" id="cfg-nome-arvore" placeholder="RG {{Codigo SIPRA}}">
+          <span>Nome na arvore (coringas {{Codigo SIPRA}}, {{Nome Titular 1}} ou coluna do CSV, ex.: {{Lote}})</span>
+          <input type="text" id="cfg-nome-arvore" placeholder="Ex: {{Nome Titular 1}} - Lote {{Lote}}">
+          <span id="preview-nome-arvore" class="msg">&nbsp;</span>
         </label>
         <label class="campo largo">
           <span>Nivel de acesso</span>
@@ -95,11 +95,11 @@
         </label>
       </div>
       <div id="stats-anexar" class="stats">-</div>
+      <div id="pendencias-anexar" class="stats pendencias">-</div>
       <div class="linha acoes">
         <button id="btn-iniciar-anexar" class="primario">Iniciar anexacao</button>
         <button id="btn-retry-anexar" class="secundario">Repetir falhas</button>
         <button id="btn-limpar-anexar" class="perigo">Limpar</button>
-        <button id="btn-abrir-sei-anexar" class="secundario">Abrir aba do SEI</button>
         <button id="btn-cancelar-anexar" class="perigo oculto">Cancelar</button>
       </div>
       <div id="progresso-anexar" class="progresso oculto">
@@ -113,7 +113,9 @@
       <div id="ax-atual" class="exec-atual oculto">&nbsp;</div>
       <div id="ax-erros" class="exec-erros oculto"></div>
       <div id="aviso-anexar" class="msg"></div>
-      <div class="msg">Os registros vem do CSV carregado na aba <b>Gerar</b> (codigo, nome e processo SEI).</div>
+      <div class="msg">Os registros vem do CSV carregado na aba <b>Gerar</b>
+        (codigo, nome, processo SEI e as colunas do CSV que alimentam os coringas
+        <code>{{...}}</code> do nome na arvore).</div>
     </div>
 
     <div class="card">
@@ -121,7 +123,7 @@
       <div class="tabela-envolve">
         <table>
           <thead>
-            <tr><th>Cod.</th><th>Processo SEI</th><th>PDF</th><th>Status</th></tr>
+            <tr><th>Cod.</th><th>Processo SEI</th><th>PDF</th><th>Data Anexo</th><th>Status</th></tr>
           </thead>
           <tbody id="tabela-anexar"></tbody>
         </table>
@@ -141,7 +143,7 @@
           <select id="cfg-tipo-processo"></select>
         </label>
         <label class="campo largo">
-          <span>Especificacao (coringas do CSV)</span>
+          <span>Especificacao (coringas {{...}} da tabela e do CSV, ex.: {{Nome Titular 1}})</span>
           <input type="text" id="cfg-especificacao" placeholder="{{Nome Titular 1}}">
         </label>
         <label class="campo largo">
@@ -221,14 +223,27 @@
 </main>
 
 <footer>
-  <div class="linha rodape">
+  <div class="ka-linha">
     <label class="check"><input type="checkbox" id="ka-ativo"> Manter SEI vivo</label>
     <label class="intervalo">a cada
       <input type="number" id="ka-intervalo" min="30" step="10" value="60"> s
     </label>
     <button id="btn-ka-agora" class="secundario mini">Recarregar agora</button>
+    <span id="ka-status" class="ka-status">&nbsp;</span>
   </div>
-  <div id="ka-status" class="ka-status">&nbsp;</div>
+  <div class="ka-linha">
+    <label class="check"><input type="checkbox" id="ka-pgt-ativo"> Manter PGT vivo</label>
+    <label class="intervalo">a cada
+      <input type="number" id="ka-pgt-intervalo" min="30" step="10" value="60"> s
+    </label>
+    <button id="btn-ka-pgt-agora" class="secundario mini">Recarregar agora</button>
+    <span id="ka-pgt-status" class="ka-status">&nbsp;</span>
+  </div>
+  <div class="footer">
+    Copyright &copy; 2026 - Roberto Sim&otilde;es<br>
+    <a href="mailto:robsimoes@gmail.com">E-mail</a> |
+    <a href="https://wa.me/5548996793828" target="_blank" rel="noopener">WhatsApp</a>
+  </div>
 </footer>
 
 <div id="toast" class="toast oculto"></div>
